@@ -60,6 +60,10 @@ def main() -> int:
         raise SystemExit("Build output already exists; use a clean checkout for a release")
     subprocess.run(command, cwd=ROOT, check=True)
     built = output / ("app.app" if target == "darwin" else "app.dist")
+    # pywebview distributes support files for every OS; this client does not
+    # include the Android bridge or fallback CEF/.NET source references.
+    for extra in built.rglob("pywebview-android.jar"):
+        extra.unlink()
     destination = output / ("Nimbus.app" if target == "darwin" else "Nimbus v" + version)
     built.rename(destination)
     archive = ROOT / "dist" / ("nimbus-" + version + "-" + target + "-" + platform.machine())
