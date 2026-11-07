@@ -43,7 +43,7 @@ class ClientBoundaryTests(unittest.TestCase):
 
     def test_no_native_profile_edit_is_exposed_by_the_client(self):
         self.assertFalse(hasattr(profiles, "profile_edit_update"))
-        tree = ast.parse((ROOT / "main.py").read_text())
+        tree = ast.parse((ROOT / "main.py").read_text(encoding="utf-8"))
         self.assertFalse(any(isinstance(n, ast.FunctionDef) and n.name == "_api_profile_edit" for n in ast.walk(tree)))
 
 

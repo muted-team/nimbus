@@ -39,6 +39,9 @@ _configure_linux_webview(os.environ, sys.platform)
 import webview
 
 from modules.brand import PRODUCT
+from modules.console import configure_console
+
+configure_console()
 
 # сколько запасных портов перебираем, если занятый
 _PORT_TRIES = 20

@@ -18,7 +18,7 @@ sys.path.insert(0, str(ROOT))
 
 
 def server_class():
-    tree = ast.parse((ROOT / 'main.py').read_text())
+    tree = ast.parse((ROOT / 'main.py').read_text(encoding='utf-8'))
     nodes = [n for n in tree.body if isinstance(n, ast.ClassDef)
              and n.name == '_QuietThreadingHTTPServer']
     namespace = {'ThreadingHTTPServer': ThreadingHTTPServer, 'threading': threading,
@@ -28,7 +28,7 @@ def server_class():
 
 
 def application_handler():
-    tree = ast.parse((ROOT / 'main.py').read_text())
+    tree = ast.parse((ROOT / 'main.py').read_text(encoding='utf-8'))
     handler = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == 'Handler')
     names = ('_json', '_drain_body', '_secure_link', '_client_ip', '_auth_ok', '_auth_required',
              '_foreign', '_allowed', '_api_auth_get', '_api_auth_login', '_api_auth_logout',

@@ -13,6 +13,9 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from modules import config  # noqa: E402
+from modules.console import configure_console  # noqa: E402
+
+configure_console()
 
 _MAX_BODY = 4 * 1024 * 1024  # 4 MiB
 # фото в папку-слот приходит сырым телом: лимит свой, крупнее обычного
