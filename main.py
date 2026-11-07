@@ -2415,6 +2415,14 @@ class _QuietThreadingHTTPServer(ThreadingHTTPServer):
     (реальные ошибки обработчика) идёт как раньше — иначе в этом же шуме
     потерялись бы настоящие сбои."""
 
+    def server_bind(self):
+        # The client only needs its literal bound address, not a DNS hostname.
+        # HTTPServer.getfqdn can block startup on unconfigured local aliases.
+        from socketserver import TCPServer
+        TCPServer.server_bind(self)
+        self.server_name = str(self.server_address[0])
+        self.server_port = int(self.server_address[1])
+
     def __init__(self, *args, **kwargs):
         self._phone_lock = threading.RLock()
         self._phone_servers = []

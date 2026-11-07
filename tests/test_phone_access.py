@@ -66,6 +66,15 @@ class Handler(BaseHTTPRequestHandler):
 
 
 class PhoneAccessTests(unittest.TestCase):
+    def test_local_listener_does_not_wait_for_reverse_dns(self):
+        with patch.object(socket, 'getfqdn', side_effect=AssertionError('No reverse DNS for a local listener')):
+            server = server_class()(('127.0.0.1', 0), Handler)
+        try:
+            self.assertEqual(server.server_name, '127.0.0.1')
+            self.assertGreater(server.server_port, 0)
+        finally:
+            server.server_close()
+
     def test_switch_opens_and_closes_lan_without_changing_local_listener(self):
         server = server_class()(('127.0.0.1', 0), Handler)
         server.daemon_threads = True
