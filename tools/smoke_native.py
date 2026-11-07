@@ -156,6 +156,13 @@ def main() -> int:
                 time.sleep(.25)
             if not dom_report.exists() or not json.loads(dom_report.read_text(encoding="utf-8")).get("ok"):
                 raise RuntimeError("Native DOM verification failed")
+            # DOM success is flushed while the window is deliberately kept
+            # open; this screenshot therefore records the checked final route.
+            time.sleep(.5)
+            if sys.platform == "darwin":
+                subprocess.run(["screencapture", "-x", "-l", str(found[0]['kCGWindowNumber']), str(image_path)], check=True, timeout=5)
+            else:
+                subprocess.run([sys.executable, "-c", screenshot], env=environment, check=True, timeout=10)
             (output / "results.json").write_text(json.dumps({"nativeWindow": window,
                 "renderedPixels": rendered, "release": release['version'], "api": True,
                 "platform": sys.platform}), encoding="utf-8")
