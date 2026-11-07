@@ -18,6 +18,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from modules import accounts  # noqa: E402
+from modules.console import configure_console
+
+configure_console()
 
 T16 = "JBSWY3DPEHPK3PXP"
 T26 = "KRSXG5CTMVRXEZLU"

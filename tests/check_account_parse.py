@@ -19,6 +19,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from modules.accounts import _parse_account_line as parse  # noqa: E402
+from modules.console import configure_console
+
+configure_console()
 
 TOTP = "JBSWY3DPEHPK3PXP"                    # 16 символов = 80 бит
 TOTP32 = "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP"  # 32 символа = 160 бит
