@@ -10,7 +10,7 @@ from modules.console import configure_console
 
 configure_console()
 faulthandler.enable()
-faulthandler.dump_traceback_later(45, repeat=True)
+faulthandler.dump_traceback_later(60, exit=True)
 try:
     suite = unittest.defaultTestLoader.discover(str(ROOT / "tests"), pattern="test_*.py")
     result = unittest.TextTestRunner(verbosity=2).run(suite)

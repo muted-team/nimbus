@@ -13,7 +13,7 @@ CONFIG_FILE = ROOT / "config.json"
 
 DEFAULTS = {
     # chrome152 / firefox155; фиксируется при запуске процесса.
-    "browser_profile": "firefox155",
+    "browser_profile": "chrome152",
     # None, а не конкретный username: чужой дефолт не должен уезжать
     # пользователям в exe. Пустой дефолт -> login.load_account(None) даёт
     # внятную ошибку «добавьте аккаунт и войдите», а session_manager.

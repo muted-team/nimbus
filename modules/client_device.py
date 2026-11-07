@@ -24,7 +24,7 @@ _SPECS = {
 }
 BROWSER_PROFILES = tuple(_SPECS)
 _browser = contextvars.ContextVar("tiktok_browser_profile", default=None)
-_DEFAULT_PROFILE = os.environ.get("TIKTOK_BROWSER_PROFILE") or config.get("browser_profile", "firefox155")
+_DEFAULT_PROFILE = os.environ.get("TIKTOK_BROWSER_PROFILE") or config.get("browser_profile", "chrome152")
 
 
 def browser_profile() -> str:
