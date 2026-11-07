@@ -1,0 +1,30 @@
+# User data and credentials
+/config.json
+/accounts.json
+/banned.json
+/data.db*
+/sessions/
+/media/
+/assets/
+/logs/
+/tiktok_cookies*
+/ts_guard_config.json
+*.har
+*.jar
+*.log
+*.key
+*.tmp
+*.part
+*.claim_*
+# Generated output
+.venv/
+.venv-*/
+__pycache__/
+*.py[cod]
+node_modules/
+/ui/
+/build/
+/dist/
+*.egg-info/
+nuitka-crash-report.xml
+.DS_Store

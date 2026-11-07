@@ -1,0 +1,210 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "@fontsource-variable/inter";
+
+@custom-variant dark (&:is(.dark *));
+
+/* Токены shadcn (base neutral), акцент — indigo-500,
+   общий для всех сервисов владельца. Цвета в компонентах — только токенами. */
+@theme inline {
+  --font-sans: "Inter Variable", ui-sans-serif, system-ui, "Segoe UI", sans-serif;
+  --font-heading: var(--font-sans);
+  --font-mono: ui-monospace, "Cascadia Mono", "Cascadia Code", Consolas, monospace;
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-info: var(--info);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
+  /* Скругления двух языков: элементы управления (кнопки, поля, пункты меню)
+     — 8 px, контейнеры (карточки, панели, диалоги) — 12 px. Таблетки —
+     только у статусов. */
+  --radius-sm: calc(var(--radius) * 0.5);
+  --radius-md: calc(var(--radius) * 0.75);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.5);
+  --radius-2xl: calc(var(--radius) * 2);
+
+  /* Шкала шрифтов — пять ступеней: 12 подписи, 13 таблицы и списки,
+     14 формы и текст, 18 заголовок экрана, 24 крупные числа. */
+  --text-row: 0.8125rem;
+  --text-row--line-height: 1.25rem;
+}
+
+:root {
+  color-scheme: light;
+  --radius: 0.5rem;
+
+  --background: oklch(0.985 0 0);
+  --foreground: oklch(0.205 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.205 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.205 0 0);
+  --primary: oklch(0.511 0.262 276.966);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.94 0 0);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: oklch(0.955 0 0);
+  --muted-foreground: oklch(0.50 0 0);
+  --accent: oklch(0.93 0.034 272.788);
+  --accent-foreground: oklch(0.457 0.24 277.023);
+  --destructive: oklch(0.577 0.245 27.325);
+  --success: oklch(0.50 0.14 160);
+  --warning: oklch(0.50 0.11 70);
+  --info: oklch(0.546 0.245 262.881);
+  --border: oklch(0 0 0 / 12%);
+  --input: oklch(0 0 0 / 17%);
+  --ring: oklch(0.585 0.233 277.117 / 80%);
+
+  --sidebar: oklch(0.965 0 0);
+  --sidebar-foreground: oklch(0.205 0 0);
+  --sidebar-primary: var(--primary);
+  --sidebar-primary-foreground: var(--primary-foreground);
+  --sidebar-accent: var(--accent);
+  --sidebar-accent-foreground: var(--accent-foreground);
+  --sidebar-border: var(--border);
+  --sidebar-ring: var(--ring);
+}
+
+:root.dark {
+  color-scheme: dark;
+
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.178 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.205 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.585 0.233 277.117);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.269 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.235 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.28 0.055 277);
+  --accent-foreground: oklch(0.82 0.10 277);
+  --destructive: oklch(0.704 0.191 22.216);
+  --success: oklch(0.723 0.15 162);
+  --warning: oklch(0.82 0.15 85);
+  /* Информационные отметки, например верификация аккаунта.
+     Активные операции и прогресс используют акцентный --primary. */
+  --info: oklch(0.707 0.165 254.624);
+  --border: oklch(1 0 0 / 9%);
+  --input: oklch(1 0 0 / 14%);
+  --ring: oklch(0.585 0.233 277.117 / 80%);
+
+  --sidebar: oklch(0.165 0 0);
+  --sidebar-foreground: oklch(0.985 0 0);
+  --sidebar-primary: oklch(0.585 0.233 277.117);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.28 0.055 277);
+  --sidebar-accent-foreground: oklch(0.82 0.10 277);
+  --sidebar-border: oklch(1 0 0 / 8%);
+  --sidebar-ring: oklch(0.585 0.233 277.117 / 80%);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  html {
+    @apply font-sans;
+    -webkit-text-size-adjust: 100%;
+    /* потягивание вниз на телефоне не перезагружает страницу посреди прогона */
+    overscroll-behavior-y: none;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+    -webkit-tap-highlight-color: transparent;
+    font-optical-sizing: auto;
+  }
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+  ::selection {
+    background: color-mix(in oklch, var(--primary) 40%, transparent);
+  }
+  /* поля ввода на телефоне — 16px, иначе iOS зумит страницу при фокусе */
+  @media (pointer: coarse) {
+    input,
+    textarea,
+    select {
+      font-size: 16px !important;
+    }
+  }
+}
+
+/* Полосы прокрутки: тонкая таблетка в тон. Окно программы — WebView2
+   (Chromium): scrollbar-color/scrollbar-width отключили бы ::-webkit-scrollbar
+   целиком, поэтому они — только запасной путь для других движков. */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: color-mix(in oklch, var(--muted-foreground) 28%, transparent)
+    padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: color-mix(in oklch, var(--muted-foreground) 50%, transparent);
+}
+@supports not selector(::-webkit-scrollbar) {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in oklch, var(--muted-foreground) 28%, transparent)
+      transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+  /* спиннеру вращаться можно — без него «идёт работа» не видно */
+  .animate-spin {
+    animation-duration: 1.6s !important;
+    animation-iteration-count: infinite !important;
+  }
+}
+
+@utility tabular {
+  font-variant-numeric: tabular-nums;
+}

@@ -1,0 +1,5 @@
+# Open client runtime; no TikTok signing or service dependencies.
+curl_cffi==0.17.0
+Pillow==13.0.0
+pillow-heif==1.8.1
+pywebview==6.2.1
