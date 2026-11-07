@@ -272,6 +272,10 @@ def _check_ui(window, report: Path) -> None:
         result["error"] = str(exc)
     finally:
         report.write_text(json.dumps(result), encoding="utf-8")
+        # Give the external acceptance harness time to capture the rendered
+        # window after the report has been flushed.
+        if result.get("ok"):
+            time.sleep(5)
         window.destroy()
 
 

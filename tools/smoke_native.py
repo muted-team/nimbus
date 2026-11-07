@@ -132,8 +132,12 @@ def main() -> int:
             from PIL import Image
             image_path = output / "native-window.png"
             rendered = False
-            for _ in range(40):
+            for _ in range(240):
                 time.sleep(.25)
+                if dom_report.exists():
+                    checked = json.loads(dom_report.read_text(encoding="utf-8"))
+                    if not checked.get("ok"):
+                        raise RuntimeError("Native DOM failed: " + checked.get("error", "unknown"))
                 if sys.platform == "darwin":
                     subprocess.run(["screencapture", "-x", "-l", str(found[0]['kCGWindowNumber']), str(image_path)], check=True, timeout=5)
                 else:
@@ -143,7 +147,7 @@ def main() -> int:
                     rendered = colors is None or len(colors) > 20
                 if rendered:
                     break
-            if not rendered:
+            if not rendered and not dom_report.exists():
                 raise RuntimeError("Native window stayed blank")
             deadline = time.monotonic() + 90
             while not dom_report.exists() and time.monotonic() < deadline:

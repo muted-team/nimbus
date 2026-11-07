@@ -88,6 +88,12 @@ jobs:
         with:
           name: smoke-${{ matrix.platform }}
           path: smoke-results/
+      - name: Save failed package for diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: diagnostic-${{ matrix.platform }}
+          path: dist/*.zip
       - uses: actions/upload-artifact@v4
         with:
           name: nimbus-${{ matrix.platform }}
