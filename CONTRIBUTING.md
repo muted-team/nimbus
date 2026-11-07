@@ -1,18 +1,17 @@
-# Contributing
+# Как участвовать
 
-Open an issue for a bug or proposal, then send a focused pull request with
-the expected behavior and relevant test results. Keep each change small
-enough to review. Include a clear explanation and tests for the behavior
-your change introduces.
+Для ошибки или предложения создайте issue, затем отправьте небольшой pull
+request с описанием ожидаемого поведения и результатами проверок. Каждая
+правка должна быть понятной и достаточно небольшой для отдельного ревью.
 
-Use synthetic accounts, cookies and media in tests. Never include personal
-data, live API keys, session files or network captures. Run the checks listed
-in README before submitting. Do not use real TikTok accounts in CI.
+Используйте в тестах вымышленные аккаунты, куки и медиа. Не включайте личные
+данные, настоящие ключи API, сессии и сетевые записи. Перед отправкой
+выполните проверки из README. Реальные аккаунты TikTok в CI не используются.
 
-Media processing and uniquification live in `modules/uniq.py` and
-`web/src/features/uniq/`. UI text belongs in the translation catalog.
-Use existing Base UI components and semantic theme tokens.
+Обработка и уникализация находятся в `modules/uniq.py` и
+`web/src/features/uniq/`. Тексты интерфейса добавляйте в каталог переводов.
+Используйте существующие компоненты Base UI и цветовые токены темы.
 
-The Nimbus service is separate. Client changes must run from a clean clone
-without private service modules. Keep API contracts backward compatible
-and provide a clear failure when a service capability is unavailable.
+Сервис Nimbus — отдельный проект. Клиент должен запускаться из чистого клона
+без приватных серверных модулей. Сохраняйте совместимость API и показывайте
+понятную ошибку, если сервер не поддерживает новую возможность.

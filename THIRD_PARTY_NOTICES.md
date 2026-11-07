@@ -1,15 +1,15 @@
-# Third-party notices
+# Сторонние компоненты
 
-Nimbus uses Python and npm packages under their respective licenses.
-The npm lockfile and Python requirement pins record the exact dependencies.
+Nimbus использует Python- и npm-пакеты на условиях их собственных лицензий.
+Точные версии записаны в requirements и npm lockfile.
 
-- Inter Variable font: SIL Open Font License 1.1 (`@fontsource-variable/inter`).
-- Base UI and shadcn component sources: MIT; retained dependency licenses
-  apply to their components.
-- React, Tailwind CSS, Lucide, TanStack, Zustand, Wouter, Sonner and QRCode:
-  see the licenses distributed with each package.
-- pywebview, Pillow, pillow-heif and curl_cffi: see their package licenses.
-- Native WebView2, WebKit and GTK runtimes retain their own licenses.
+- SVG-флаги: flag-icons, автор lipis, MIT; см. `web/public/flags/LICENSE`.
+- Шрифт Inter Variable: SIL Open Font License 1.1 (`@fontsource-variable/inter`).
+- Компоненты Base UI и shadcn: MIT; лицензии компонентов сохраняются.
+- React, Tailwind CSS, Lucide, TanStack, Zustand, Wouter, Sonner и QRCode:
+  лицензии входят в соответствующие пакеты.
+- pywebview, Pillow, pillow-heif и curl_cffi: лицензии соответствующих пакетов.
+- Системные WebView2, WebKit и GTK распространяются на своих условиях.
 
-Build artifacts include the dependencies selected by the target platform.
-Do not remove their bundled license files when packaging a release.
+Готовые сборки включают зависимости выбранной платформы. При упаковке
+релиза сохраняйте поставляемые с ними файлы лицензий.

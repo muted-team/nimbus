@@ -1,12 +1,12 @@
-# Security
+# Безопасность
 
-Do not put credentials, session cookies or private account information in
-public issues. Report a security concern privately to
-[the maintainer](https://t.me/emptyenemy), with a synthetic reproduction when possible.
+Не прикладывайте ключи, куки и личные данные аккаунтов к публичным issue.
+Об уязвимости сообщите [автору в Telegram](https://t.me/emptyenemy),
+по возможности с примером на вымышленных данных.
 
-The client stores local settings, account credentials and encrypted service
-state in its data directory. Do not share that directory. LAN access requires
-an interface password and must stay restricted to a trusted local network.
+Клиент хранит настройки, учётные данные и зашифрованное состояние сервиса
+в своей папке данных. Не передавайте эту папку другим людям. Доступ из
+локальной сети требует пароля интерфейса и предназначен для доверенной сети.
 
-Forks receive the client source; they do not receive access to the Nimbus
-service, its signing implementation or its credentials.
+Открытые исходники клиента не содержат исходников подписей, служебных
+ключей сервера и доступа к сервису Nimbus.

@@ -1,29 +1,52 @@
 # Nimbus
 
-Nimbus is an open desktop client for managing TikTok accounts, preparing
-media and running publication campaigns through the Nimbus API service.
-Its interface is available in English, Russian and Ukrainian, with system,
-light and dark themes. A phone on the same network can open the interface
-using a QR code.
+Nimbus — открытый клиент для управления аккаунтами TikTok, подготовки
+креативов и запуска публикаций через сервис Nimbus API. Интерфейс доступен
+на русском, английском и украинском; темы — системная, светлая и тёмная.
+С телефона в той же сети можно подключиться по QR-коду.
 
-The client is MIT licensed. The remote Nimbus service is operated separately
-and requires an API key. TikTok authentication, request signing and native
-publication run on that service; its source and credentials are not needed
-to develop this client. Media processing and uniquification run locally.
+Клиент распространяется под MIT. Сервис Nimbus работает отдельно и требует
+ключ API. Вход в TikTok, подписи запросов и публикация выполняются сервисом;
+его исходники и служебные ключи для разработки клиента не нужны.
+Обработка медиа и уникализация работают на компьютере пользователя.
 
-## Run from source
+## Готовая программа
 
-Use Python 3.14 and Node.js 24. Install the platform's desktop webview first:
-Edge WebView2 on Windows, WebKit on macOS, or GTK 3 + WebKitGTK 4.1 on Linux.
-On Debian/Ubuntu Linux these packages are `python3-gi`, `gir1.2-gtk-3.0`
-and `gir1.2-webkit2-4.1`. On Arch Linux install `python-gobject`, `gtk3`
-and `webkit2gtk-4.1`.
+Первый выпуск 1.0.0 готовится для Windows x64 и Linux x64. После проверки
+сборки появятся в Releases. Обычному пользователю достаточно распаковать
+архив целиком и запустить Nimbus — Python и Node.js устанавливать не нужно.
+Установка и работа описаны в [инструкции](ИНСТРУКЦИЯ.md).
+macOS планируется позже. Публичный релиз пока не опубликован.
+
+## Запуск из исходников
+
+Нужны Python 3.14 и Node.js 24. Для нативного окна используется Edge WebView2
+на Windows и GTK 3 + WebKitGTK 4.1 на Linux. На Debian/Ubuntu установите
+`python3-gi`, `gir1.2-gtk-3.0`, `gir1.2-webkit2-4.1`; на Arch Linux —
+`python-gobject`, `gtk3`, `webkit2gtk-4.1`.
+
+Создайте окружение и активируйте его:
 
 ```sh
 python -m venv .venv
-# Linux with distro-installed PyGObject: python -m venv --system-site-packages .venv
-# Windows: .venv\Scripts\activate
+```
+
+На Windows, в PowerShell:
+
+```powershell
+.venv\Scripts\Activate.ps1
+```
+
+На Linux с системным PyGObject:
+
+```sh
+python -m venv --system-site-packages .venv
 source .venv/bin/activate
+```
+
+Установите зависимости, соберите интерфейс и запустите программу:
+
+```sh
 python -m pip install -r requirements.txt
 cd web
 npm ci
@@ -32,16 +55,16 @@ cd ..
 python app.py
 ```
 
-For browser development run `python main.py 8740 127.0.0.1`, then open
-`http://127.0.0.1:8740`. The desktop window adds native file dialogs;
-the browser and phone interfaces use uploads instead.
+Для работы в обычном браузере запустите `python main.py 8740 127.0.0.1`
+и откройте `http://127.0.0.1:8740`. Нативное окно добавляет системный выбор
+папок; браузер и телефон используют загрузку файлов.
 
-The client creates its settings, accounts, sessions and SQLite database
-locally. Keep those files private. A clean clone contains no accounts or API
-keys. Existing `TikTok Web API v…` folders can be imported on first launch
-when placed alongside the new `Nimbus v…` folder; the old files are preserved.
+Настройки, аккаунты, сессии и база данных создаются локально. Не публикуйте
+эти файлы. Чистый клон не содержит аккаунтов и ключей API. При первом запуске
+папки `Nimbus v…` данные можно импортировать из лежащей рядом старой папки
+`TikTok Web API v…`; исходные файлы сохраняются.
 
-## Develop
+## Разработка и проверки
 
 ```sh
 python -m unittest discover -s tests -p "test_*.py"
@@ -56,13 +79,14 @@ npx vitest run
 npm run build
 ```
 
-To work without a live API key or TikTok account, run
-`python dev/_ui_mock.py --scenario idle` and set `API_TARGET=http://127.0.0.1:8799`
-when starting Vite. The mock contains synthetic data only.
+Для работы без ключа API и реального аккаунта запустите
+`python dev/_ui_mock.py --scenario idle` из корня проекта. При запуске Vite
+задайте `API_TARGET=http://127.0.0.1:8799`. Стенд содержит только вымышленные
+данные. Устройство интерфейса описано в [web/README.md](web/README.md).
 
-## Build
+## Сборка
 
-Build on the target operating system:
+Собирайте приложение на целевой операционной системе:
 
 ```sh
 python -m pip install -r requirements-dev.txt
@@ -70,22 +94,20 @@ python build.py --dry-run
 python build.py
 ```
 
-The builder produces a standalone application and a ZIP in `dist/`.
-GitHub Actions checks Python and frontend code on Windows, Linux and macOS
-and provides Windows/Linux build artifacts. macOS packaging is planned later.
-Successful compilation is followed by a native
-application check before a platform is declared supported in a release.
-Version 1.0.0 is being prepared; no public release is published yet.
+Сборщик создаёт самостоятельное приложение и ZIP в `dist/`.
+GitHub Actions проверяет Python и интерфейс на Windows и Linux и создаёт
+архивы сборок. После компиляции готовую программу проверяем в нативном окне;
+успешная компиляция сама по себе не подтверждает работу на системе.
 
-## Releases
+## Выпуски
 
-Collect small reviewed commits, run the checks, write short user-facing
-notes, and tag the tested commit as `v1.0.0`, `v1.0.1`, and so on.
-Publishing a release is a separate, explicit step after platform validation.
-The old private releases are summarized as `0.0.1` through `0.0.9`.
+Накапливаем небольшие проверенные коммиты, запускаем тесты, пишем короткие
+заметки для пользователей и ставим тег на проверенный коммит:
+`v1.0.0`, `v1.0.1` и далее. Публикация выпуска — отдельный шаг после проверки
+пакетов. История закрытых версий сгруппирована в `0.0.1`–`0.0.9`.
 
-## Contribute
+## Участие
 
-Improvements to media processing, uniquification, usability, accessibility
-and platform support are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) and
-[SECURITY.md](SECURITY.md). The code is licensed under [MIT](LICENSE).
+Приветствуются улучшения уникализации, обработки медиа, интерфейса,
+доступности и поддержки платформ. См. [правила участия](CONTRIBUTING.md)
+и [сообщения о безопасности](SECURITY.md). Лицензия проекта — [MIT](LICENSE).
