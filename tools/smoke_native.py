@@ -126,8 +126,27 @@ def main() -> int:
                         break
                 time.sleep(.5)
             if not window: raise RuntimeError("Native window not found")
+            # The toolkit creates its window before WebKit paints the page.
+            # Wait for actual rendered pixels instead of accepting a black frame.
+            from PIL import Image
+            image_path = output / "native-window.png"
+            rendered = False
+            for _ in range(40):
+                time.sleep(.25)
+                if sys.platform == "darwin":
+                    subprocess.run(["screencapture", "-x", "-l", str(found[0]['kCGWindowNumber']), str(image_path)], check=True, timeout=5)
+                else:
+                    subprocess.run([sys.executable, "-c", screenshot], env=environment, check=True, timeout=10)
+                with Image.open(image_path) as image:
+                    colors = image.convert("RGB").resize((160, 100)).getcolors(16000)
+                    rendered = colors is None or len(colors) > 20
+                if rendered:
+                    break
+            if not rendered:
+                raise RuntimeError("Native window stayed blank")
             (output / "results.json").write_text(json.dumps({"nativeWindow": window,
-                "release": release['version'], "api": True, "platform": sys.platform}), encoding="utf-8")
+                "renderedPixels": rendered, "release": release['version'], "api": True,
+                "platform": sys.platform}), encoding="utf-8")
             print("Native package: API and window passed")
         finally:
             for process in (app, display):
