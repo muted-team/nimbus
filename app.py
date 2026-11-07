@@ -13,12 +13,14 @@ config.json (или аргумента); все заняты — нативны�
 
 Разработчику для CLI-прогонов без окна — python main.py [порт] [host]."""
 import ctypes
+import json
 import os
 import re
 import shutil
 import socket
 import sys
 import threading
+import time
 import traceback
 import webbrowser
 from datetime import datetime
@@ -240,6 +242,39 @@ def _browser_fallback(url: str, text: str) -> None:
                          + "Не закрывайте это сообщение, пока работаете.")
 
 
+def _check_ui(window, report: Path) -> None:
+    """Explicit build-check mode: verify real DOM in the selected native webview."""
+    result = {"ok": False, "routes": []}
+    try:
+        if not window.events.loaded.wait(60):
+            raise RuntimeError("Native document did not load")
+        window.evaluate_js("window.__nativeCheckErrors=[]; addEventListener('error',e=>__nativeCheckErrors.push(e.message)); true")
+        routes = (("/", "Публикация"), ("/accounts", "Аккаунты"), ("/proxies", "Прокси"),
+                  ("/media", "Креативы"), ("/logs", "Логи"), ("/settings", "Настройки"),
+                  ("/profile", "Профиль"))
+        for route, heading in routes:
+            window.evaluate_js("location.hash=" + json.dumps(route) + "; true")
+            state = None
+            deadline = time.monotonic() + 20
+            while time.monotonic() < deadline:
+                state = window.evaluate_js("(()=>{const h=[...document.querySelectorAll('h1')].find(e=>e.textContent.trim()===" + json.dumps(heading) + "); return {heading:h?.textContent,ready:!!h&&h.getBoundingClientRect().width>0,overflow:document.documentElement.scrollWidth>innerWidth+1,errors:window.__nativeCheckErrors};})()")
+                if isinstance(state, dict) and state.get("ready"):
+                    break
+                time.sleep(.1)
+            if not isinstance(state, dict) or not state.get("ready"):
+                raise RuntimeError("Native route did not render: " + route)
+            if state.get("overflow") or state.get("errors"):
+                raise RuntimeError("Native page failed its layout check")
+            result["routes"].append({"route": route, **state})
+        time.sleep(.5)
+        result["ok"] = True
+    except Exception as exc:
+        result["error"] = str(exc)
+    finally:
+        report.write_text(json.dumps(result), encoding="utf-8")
+        window.destroy()
+
+
 def main() -> int:
     # до импорта сервера: он заводит config.json с настройками по умолчанию,
     # и перенос решил бы, что папка уже обжита
@@ -315,7 +350,7 @@ def main() -> int:
         # окне — не скопировать ни строку лога, ни логин. Где выделение мешает
         # (кнопки, строки списков), интерфейс запрещает его сам.
         try:
-            webview.create_window(PRODUCT, url, width=1280, height=900,
+            window = webview.create_window(PRODUCT, url, width=1280, height=900,
                                   min_size=(760, 560), js_api=Api(),
                                   background_color="#0a0a0a", text_select=True)
             # private_mode=False: localStorage окна живёт между запусками. С дефолтным
@@ -323,7 +358,14 @@ def main() -> int:
             # «Подробно» и прочие UI-настройки (тексты формы публикации теперь и так
             # хранятся в config.json, но интерфейсные мелочи — только здесь). Профиль
             # WebView2 кладётся в %APPDATA%\pywebview
-            webview.start(private_mode=False)
+            check_report = None
+            if "--check-ui" in sys.argv:
+                index = sys.argv.index("--check-ui")
+                check_report = Path(sys.argv[index + 1]).resolve()
+            if check_report is not None:
+                webview.start(lambda: _check_ui(window, check_report), private_mode=False)
+            else:
+                webview.start(private_mode=False)
         except Exception as exc:
             _log("окно не открылось: " + repr(exc) + NL + traceback.format_exc())
             _browser_fallback(url,

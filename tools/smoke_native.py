@@ -94,7 +94,8 @@ def main() -> int:
                     if display.poll() is not None: raise RuntimeError("Isolated display failed")
                     time.sleep(.1)
             with (output / "application.log").open("wb") as log:
-                app = subprocess.Popen([str(binary), str(port)], cwd=data_root, env=environment,
+                dom_report = output / "native-dom.json"
+                app = subprocess.Popen([str(binary), str(port), "--check-ui", str(dom_report)], cwd=data_root, env=environment,
                                        stdin=subprocess.DEVNULL, stdout=log, stderr=log)
             deadline = time.monotonic() + 90
             release = None
@@ -144,6 +145,13 @@ def main() -> int:
                     break
             if not rendered:
                 raise RuntimeError("Native window stayed blank")
+            deadline = time.monotonic() + 90
+            while not dom_report.exists() and time.monotonic() < deadline:
+                if app.poll() is not None:
+                    break
+                time.sleep(.25)
+            if not dom_report.exists() or not json.loads(dom_report.read_text(encoding="utf-8")).get("ok"):
+                raise RuntimeError("Native DOM verification failed")
             (output / "results.json").write_text(json.dumps({"nativeWindow": window,
                 "renderedPixels": rendered, "release": release['version'], "api": True,
                 "platform": sys.platform}), encoding="utf-8")
