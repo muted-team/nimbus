@@ -11,7 +11,9 @@ assert.equal(process.platform, "win32", "Run this check on Windows")
 const source = path.resolve(process.argv[2])
 const output = path.resolve(process.argv[3] || "smoke-results")
 const temporary = await mkdtemp(path.join(os.tmpdir(), "nimbus-package-check-"))
-const application = path.join(temporary, "Nimbus v1.0.0")
+const expectedVersion = (await readFile(path.join(source, "CHANGELOG.md"), "utf8")).match(/^## (\d+\.\d+\.\d+)/m)?.[1]
+assert.ok(expectedVersion, "Release version is missing")
+const application = path.join(temporary, "Nimbus v" + expectedVersion)
 await cp(source, application, { recursive: true })
 const { mkdir } = await import("node:fs/promises")
 await mkdir(output, { recursive: true })
@@ -58,7 +60,7 @@ try {
     const response = await fetch(base + "/api/changelog")
     return response.ok ? response.json() : null
   })
-  assert.equal(release.version, "1.0.0")
+  assert.equal(release.version, expectedVersion)
   const page = await (await fetch(base)).text()
   for (const match of page.matchAll(/(?:src|href)="(?:\.\/)?([^"?#]+\.(?:js|css))"/g)) {
     assert.equal((await fetch(base + "/" + match[1].replace(/^\//, ""))).status, 200)

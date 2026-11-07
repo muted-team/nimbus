@@ -1,6 +1,8 @@
-name: Build desktop packages
+name: Build and release Nimbus
 
 on:
+  push:
+    tags: ['v*']
   workflow_dispatch:
 
 permissions:
@@ -8,10 +10,19 @@ permissions:
 
 jobs:
   build:
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, windows-2022]
+        include:
+          - os: windows-2022
+            platform: windows-x64
+          - os: ubuntu-24.04
+            platform: linux-x64
+          - os: macos-15
+            platform: macos-arm64
+          - os: macos-15-intel
+            platform: macos-x64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -27,27 +38,80 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential patchelf libgirepository-2.0-dev libcairo2-dev gir1.2-gtk-3.0 gir1.2-webkit2-4.1
+          sudo apt-get install -y build-essential libgirepository-2.0-dev libcairo2-dev gir1.2-gtk-3.0 gir1.2-webkit2-4.1 xvfb xauth
           python -m pip install PyGObject
+      - run: python -m pip install --upgrade pip
       - run: python -m pip install -r requirements-dev.txt
+      - run: python -m pip check
       - run: python -m nuitka --version
       - run: python tools/check_public_tree.py
       - run: python -m unittest discover -s tests -p "test_*.py"
-      - run: python build.py
+      - run: npm ci
+        working-directory: web
+      - run: npm run typecheck
+        working-directory: web
+      - run: npm run lint
+        working-directory: web
+      - run: npx vitest run
+        working-directory: web
+      - run: npm run build:app
+        working-directory: web
+      - name: Validate tag and release notes
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os
+          from modules import changelog
+          if os.environ['GITHUB_REF'].startswith('refs/tags/'):
+              assert os.environ['GITHUB_REF_NAME'] == 'v' + changelog.load()['version'], 'Tag differs from CHANGELOG.md'
+          PY
+      - run: python build.py --skip-frontend
       - name: Check packaged Windows client
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $package = Get-ChildItem build -Directory -Recurse | Where-Object Name -Like 'Nimbus v*' | Select-Object -First 1
           node tools/smoke_windows.mjs "$($package.FullName)" smoke-results
+      - name: Check packaged Linux or macOS client
+        if: runner.os != 'Windows'
+        run: python tools/smoke_native.py --output smoke-results
+      - name: Check package contents
+        run: python tools/check_package.py
       - name: Save native window evidence
-        if: always() && runner.os == 'Windows'
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: windows-window-check
+          name: smoke-${{ matrix.platform }}
           path: smoke-results/
       - uses: actions/upload-artifact@v4
         with:
-          name: nimbus-${{ matrix.os }}
+          name: nimbus-${{ matrix.platform }}
           path: dist/*.zip
           if-no-files-found: error
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: nimbus-*
+          path: release-files
+          merge-multiple: true
+      - name: Extract user-facing release notes
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from modules import changelog
+          release = changelog.load()['releases'][0]
+          Path('release-notes.md').write_text('\n'.join('- ' + line for line in release['changes']) + '\n', encoding='utf-8')
+          PY
+      - name: Publish checked packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" release-files/*.zip --verify-tag --title "Nimbus $GITHUB_REF_NAME" --notes-file release-notes.md
