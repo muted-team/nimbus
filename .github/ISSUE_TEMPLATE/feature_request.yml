@@ -1,0 +1,28 @@
+name: Предложить улучшение
+description: Задача пользователя и идея решения.
+title: "[Идея]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Сначала проверьте, не обсуждалась ли идея в существующих issues.
+        Примеры и снимки должны содержать только вымышленные данные.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Какую задачу хотите решить
+      description: Что вы пытаетесь сделать и что мешает сейчас?
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Как это могло бы работать
+      description: Пример действий пользователя и ожидаемого результата.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Альтернативы и примеры
+      description: Необязательно. Другие способы решения, эскизы или ссылки.

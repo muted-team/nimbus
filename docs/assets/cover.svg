@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="360" viewBox="0 0 1280 360" fill="none" role="img" aria-labelledby="title desc">
+  <title id="title">Nimbus</title>
+  <desc id="desc">От креатива до публикации. Открытый клиент от Muted для Windows, Linux и macOS.</desc>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1280" y2="360" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#111425"/>
+      <stop offset="1" stop-color="#1E1B4B"/>
+    </linearGradient>
+    <linearGradient id="icon" x1="0" y1="0" x2="32" y2="32" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#818CF8"/>
+      <stop offset="1" stop-color="#4338CA"/>
+    </linearGradient>
+    <radialGradient id="halo">
+      <stop stop-color="#6366F1" stop-opacity=".23"/>
+      <stop offset="1" stop-color="#6366F1" stop-opacity="0"/>
+    </radialGradient>
+    <clipPath id="frame"><rect width="1280" height="360" rx="24"/></clipPath>
+  </defs>
+  <g clip-path="url(#frame)">
+    <rect width="1280" height="360" fill="url(#background)"/>
+    <circle cx="1040" cy="180" r="340" fill="url(#halo)"/>
+    <g stroke="#A5B4FC" stroke-opacity=".10">
+      <circle cx="1040" cy="180" r="242"/>
+      <circle cx="1040" cy="180" r="184"/>
+      <circle cx="1040" cy="180" r="126"/>
+      <path d="M798 180h484M1040-62v484"/>
+    </g>
+    <g font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
+      <text x="64" y="62" fill="#A5B4FC" font-size="13" font-weight="600" letter-spacing="3">MUTED / OPEN SOURCE</text>
+      <text x="60" y="166" fill="#F8FAFC" font-size="88" font-weight="700" letter-spacing="-4">Nimbus</text>
+      <text x="64" y="225" fill="#E0E7FF" font-size="32" font-weight="400" letter-spacing="-.5">От креатива до публикации.</text>
+      <text x="64" y="301" fill="#A1A1B8" font-size="13" font-weight="500" letter-spacing="2">WINDOWS</text>
+      <circle cx="171" cy="296" r="2" fill="#6366F1"/>
+      <text x="191" y="301" fill="#A1A1B8" font-size="13" font-weight="500" letter-spacing="2">LINUX</text>
+      <circle cx="263" cy="296" r="2" fill="#6366F1"/>
+      <text x="283" y="301" fill="#A1A1B8" font-size="13" font-weight="500" letter-spacing="2">macOS</text>
+    </g>
+    <g transform="translate(944 84) scale(6)">
+      <rect width="32" height="32" rx="8" fill="url(#icon)"/>
+      <rect x=".1" y=".1" width="31.8" height="31.8" rx="7.9" stroke="#C7D2FE" stroke-opacity=".22" stroke-width=".2"/>
+      <g fill="#FFF">
+        <circle cx="10.5" cy="19.5" r="5"/>
+        <circle cx="16" cy="14.75" r="7"/>
+        <circle cx="21.5" cy="19.5" r="5"/>
+        <rect x="5.5" y="17.5" width="21" height="7" rx="3.5"/>
+      </g>
+      <path d="M14.15 15.9 19.75 19.1 14.15 22.3z" fill="#4F46E5" stroke="#4F46E5" stroke-width="1.2" stroke-linejoin="round"/>
+    </g>
+    <circle cx="1040" cy="-4" r="4" fill="#818CF8"/>
+    <circle cx="914" cy="180" r="4" fill="#818CF8"/>
+    <circle cx="1040" cy="364" r="4" fill="#818CF8"/>
+  </g>
+</svg>

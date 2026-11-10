@@ -1,0 +1,62 @@
+name: Сообщить об ошибке
+description: Что не сработало и как это повторить.
+title: "[Ошибка]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Спасибо за воспроизводимый пример. Перед отправкой проверьте существующие issues.
+        Не прикладывайте ключи API, пароли, куки, сессии и папку данных.
+        Об уязвимостях сообщайте приватно: https://github.com/muted-team/nimbus/blob/main/SECURITY.md
+  - type: input
+    id: version
+    attributes:
+      label: Версия Nimbus
+      placeholder: Например, 1.0.0 или хеш коммита.
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Система
+      options:
+        - Windows x64
+        - Linux x64
+        - macOS — Apple Silicon
+        - macOS — Intel
+        - Браузер телефона
+        - Другая система
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Окружение
+      description: Версия ОС, запуск из пакета или исходников; для телефона — браузер и система компьютера.
+      placeholder: Например, Windows 11, готовый ZIP.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Как повторить
+      description: Опишите шаги без настоящих учётных данных.
+      placeholder: |
+        1. Открыть раздел…
+        2. Выбрать…
+        3. Нажать…
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Ожидаемый результат
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Что произошло
+      description: Текст ошибки, снимок или короткий фрагмент лога. Предварительно скройте секреты и личные данные.
+    validations:
+      required: true
