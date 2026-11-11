@@ -18,6 +18,11 @@ from . import media_info, proxies, remote, tos_transfer as tos_upload
 # вход с кодом из почты и удаление всех постов идут минутами
 LONG = (10, 900)
 
+
+class _NoSession(remote.RemoteError):
+    """Local state is absent before any account action is sent."""
+
+
 _locks = {}
 _locks_guard = threading.Lock()
 
@@ -139,9 +144,12 @@ def _state(username: str, generation: int = None) -> str:
     out = remote.request("POST", "/v1/accounts/import", json={
         "username": username, "cookies": jar.read_text(encoding="utf-8"),
         "device": dev.read_text(encoding="utf-8") if dev.exists() else ""})
-    if not _save(username, out.get("state"), generation):
+    token = out.get("state") if isinstance(out, dict) else None
+    if not isinstance(token, str) or not token.strip() or out.get("state_saved") is False:
+        raise remote.RemoteError("Перенос сохранённой сессии не подтверждён.", stop_account=True)
+    if not _save(username, token, generation):
         raise remote.RemoteError("Состояние аккаунта изменено. Импорт не сохранён.", stop_account=True)
-    return out.get("state") or ""
+    return token
 
 
 # Сервер не может прочесть строку состояния: её шифровал другой ключ
@@ -181,7 +189,7 @@ def _call(username: str, path: str, body: dict, timeout=LONG) -> dict:
 
     def send(token):
         if not token:
-            raise remote.RemoteError("аккаунт ещё не входил — сначала вход")
+            raise _NoSession("аккаунт ещё не входил — сначала вход")
         return remote.request("POST", path, timeout=timeout,
                               retry_busy=not protected,
                               json={"username": username, "state": token, **body})
@@ -495,13 +503,29 @@ def session_check(username: str, proxy: str) -> dict:
     session_manager.check_alive. Не вошли вовсе — alive False без сети."""
     try:
         response = _call(username, "/v1/session/check", {"proxy": proxy})
+    except _NoSession:
+        return {"alive": False, "stale": True}
     except remote.RemoteError as exc:
         return {"alive": False, "network": exc.network, "error": str(exc),
                 "stop_account": exc.stop_account or exc.outcome_unknown or not exc.network}
+    except OSError:
+        return {"alive": False, "network": False, "stop_account": True,
+                "error": "Не удалось прочитать или сохранить состояние аккаунта."}
     data = response.get("data")
-    if (not isinstance(data, dict) or type(data.get("alive")) is not bool
-            or data.get("verdict") == "unknown" or data.get("stop_account") is True
-            or response.get("state_saved") is False):
+    valid = isinstance(data, dict) and type(data.get("alive")) is bool
+    if valid:
+        status = data.get("http_status")
+        if data["alive"]:
+            uid = data.get("uid")
+            valid = (type(uid) in (str, int) and bool(uid) and str(uid) != "0"
+                     and status in (None, 200) and data.get("message") in (None, "success")
+                     and data.get("code") in (None, 0))
+        else:
+            valid = (data.get("stale") is True or data.get("network") is True
+                     or status == 401 or data.get("verdict") == "rejected")
+        valid = (valid and status in (None, 200, 401) and data.get("verdict") != "unknown"
+                 and data.get("stop_account") is not True and response.get("state_saved") is not False)
+    if not valid:
         return {"alive": False, "network": False, "verdict": "unknown", "stop_account": True,
                 "error": "Проверка сессии не подтверждена. Обработка аккаунта остановлена."}
     return data

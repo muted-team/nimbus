@@ -39,14 +39,62 @@ class OperationOutcomesTests(unittest.TestCase):
 
     def test_legacy_check_keeps_its_response(self):
         for data in ({"alive": True, "uid": "123", "username": "synthetic.user"},
-                     {"alive": False, "stale": True}):
+                     {"alive": False, "stale": True, "error": "expired cookie"},
+                     {"alive": False, "network": True, "error": "transport failed"},
+                     {"alive": False, "http_status": 401}):
             with self.subTest(data=data), patch.object(cloud, "_call", return_value={"data": data}):
                 self.assertEqual(cloud.session_check("synthetic.user", "http://synthetic.invalid"), data)
+
+    def test_legacy_errors_and_unexpected_http_status_are_terminal(self):
+        cases = ({"alive": False, "error": "synthetic invalid JSON"},
+                 {"alive": False, "http_status": 200, "message": "error"},
+                 {"alive": False, "http_status": 403},
+                 {"alive": False, "http_status": 429},
+                 {"alive": False, "http_status": 500},
+                 {"alive": True, "http_status": 302, "uid": "123"},
+                 {"alive": True, "http_status": 401, "uid": "123"},
+                 {"alive": True}, {"alive": True, "uid": False})
+        for data in cases:
+            with self.subTest(data=data), patch.object(cloud, "_call", return_value={"data": data}):
+                result = cloud.session_check("synthetic.user", "http://synthetic.invalid")
+                self.assertFalse(result["alive"])
+                self.assertTrue(result["stop_account"])
+                self.assertFalse(result.get("network"))
+
+    def test_missing_or_empty_local_session_allows_first_login(self):
+        state = cloud.state_file('synthetic.user')
+        for stored in (None, '   '):
+            with self.subTest(stored=stored):
+                if stored is not None:
+                    state.write_text(stored)
+                with patch.object(remote, 'request') as request:
+                    result = cloud.session_check('synthetic.user', '')
+                self.assertFalse(result['alive'])
+                self.assertTrue(result['stale'])
+                self.assertFalse(result.get('stop_account'))
+                request.assert_not_called()
+
+    def test_unconfirmed_import_is_not_treated_as_a_fresh_account(self):
+        jar = cloud.session_manager.session_file('synthetic.user')
+        jar.write_text('{"synthetic":"old-cookies"}')
+        with patch.object(remote, 'request', return_value={}) as request:
+            result = cloud.session_check('synthetic.user', '')
+        self.assertTrue(result['stop_account'])
+        self.assertFalse(result.get('stale'))
+        self.assertEqual(jar.read_text(), '{"synthetic":"old-cookies"}')
+        request.assert_called_once()
 
     def test_failed_state_save_remains_terminal(self):
         error = remote.RemoteError("synthetic state changed", stop_account=True)
         with patch.object(cloud, "_call", side_effect=error):
             self.assertTrue(cloud.session_check("synthetic.user", "http://synthetic.invalid")["stop_account"])
+
+    def test_local_state_io_failure_stops_before_login(self):
+        with patch.object(cloud, '_call', side_effect=OSError('synthetic state read failure')):
+            result = cloud.session_check('synthetic.user', '')
+        self.assertFalse(result['alive'])
+        self.assertTrue(result['stop_account'])
+        self.assertFalse(result.get('network'))
 
     def test_disk_error_while_saving_check_is_terminal(self):
         with patch.object(cloud, "_state", return_value="synthetic-old"), \
