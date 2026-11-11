@@ -338,7 +338,8 @@ def login(acc: dict, proxy: str) -> dict:
                 return out
         else:
             saved = out.get("state")
-            if isinstance(saved, str) and saved.strip():
+            if (isinstance(saved, str) and saved.strip() and out.get("state_saved") is not False
+                    and out.get("verdict") not in ("unknown", "mode2_unavailable")):
                 # Без прежнего входа состояние содержит только устройство,
                 # не отмечаем его сессией. При 409 прежние файлы не стираются.
                 target = auth_path if had_auth_state else kept

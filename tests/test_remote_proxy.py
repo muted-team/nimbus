@@ -416,6 +416,17 @@ class CloudFailedLoginStateTest(unittest.TestCase):
                 self.assertEqual(kept.read_text(), "synthetic-new-device-only")
                 self.assertFalse(self.sessions.has_session(self.account["username"]))
 
+    def test_unconfirmed_login_never_overwrites_existing_state(self):
+        for response in ({"verdict": "unknown"}, {"verdict": "mode2_unavailable"},
+                         {"verdict": "rejected", "state_saved": False}):
+            with self.subTest(response=response), client_device.use_browser_profile(PROFILE):
+                auth = self.sessions.state_file(self.account["username"])
+                self.seed(auth, "synthetic-prior-auth")
+                result, _ = self.run_login({"ok": False, **response,
+                                            "state": "synthetic-unconfirmed"}, PROFILE)
+                self.assertFalse(result["ok"])
+                self.assertEqual(auth.read_text(), "synthetic-prior-auth")
+
     def test_failed_login_updates_existing_auth_state(self):
         for profile in client_device.BROWSER_PROFILES:
             with self.subTest(profile=profile), client_device.use_browser_profile(profile):

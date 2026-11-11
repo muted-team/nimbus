@@ -145,6 +145,18 @@ class OperationOutcomesTests(unittest.TestCase):
                     self.assertFalse(send.call_args.kwargs["allow_redirects"])
                     sleep.assert_not_called()
 
+    def test_explicit_legacy_login_is_never_retried_or_redirected(self):
+        with patch.object(config, "server_wait_min", return_value=1), \
+                patch.object(remote, "_send", return_value=SimpleNamespace(status_code=503, headers={})) as send, \
+                patch.object(remote.time, "sleep") as sleep:
+            with self.assertRaises(remote.RemoteError) as caught:
+                remote.request("POST", "/v2/legacy/login", api_key="synthetic-key")
+            self.assertTrue(caught.exception.stop_account)
+            self.assertTrue(caught.exception.outcome_unknown)
+            send.assert_called_once()
+            self.assertFalse(send.call_args.kwargs["allow_redirects"])
+            sleep.assert_not_called()
+
     def test_delete_and_logout_do_not_retry_stale_state(self):
         for path in ("/v1/posts/delete", "/v1/logout"):
             with self.subTest(path=path), patch.object(cloud, "_state", return_value="synthetic-state"), \

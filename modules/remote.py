@@ -235,7 +235,7 @@ def key() -> str:
 
 def _protected(method: str, path: str) -> bool:
     """Вход, загрузка, публикация, удаление и выход отправляются без повтора."""
-    return method.upper() == "POST" and (path.rstrip("/") in ("/v1/login", "/v2/login")
+    return method.upper() == "POST" and (path.rstrip("/") in ("/v1/login", "/v2/login", "/v2/legacy/login")
                                         or path.rstrip("/").endswith(("/publish", "/upload", "/posts/delete", "/logout")))
 
 
