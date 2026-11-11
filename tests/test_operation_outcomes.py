@@ -26,6 +26,48 @@ class OperationOutcomesTests(unittest.TestCase):
         self.stack.enter_context(patch.object(remote.requests.Session, "request",
                                              side_effect=AssertionError("HTTP denied")))
 
+    def test_login_contradictory_verdict_preserves_all_local_state(self):
+        username = "synthetic.user"
+        auth = cloud.state_file(username)
+        kept = cloud.session_manager.device_state_file(username)
+        device = cloud.session_manager.device_file(username)
+        for verdict in ("unknown", "mode2_unavailable", "rejected", "", None, True, [], {}):
+            for had_auth in (False, True):
+                with self.subTest(verdict=verdict, had_auth=had_auth):
+                    auth.unlink(missing_ok=True)
+                    if had_auth:
+                        auth.write_text("old-auth")
+                    kept.write_text("old-kept")
+                    device.write_text('{"synthetic":"old-device"}')
+                    before = {p: p.read_bytes() if p.exists() else None for p in (auth, kept, device)}
+                    response = {"ok": True, "verdict": verdict, "state_saved": True,
+                                "state": "replacement"}
+                    with patch.object(remote, "request", return_value=response) as request:
+                        result = cloud.login({"username": username, "password": "fixture"}, "")
+                    request.assert_called_once()
+                    self.assertFalse(result["ok"])
+                    self.assertEqual(result["verdict"], "unknown")
+                    self.assertFalse(result["retriable"])
+                    self.assertNotIn("state", result)
+                    for path, content in before.items():
+                        self.assertEqual(path.read_bytes() if path.exists() else None, content)
+
+    def test_login_accepts_legacy_success_without_verdict(self):
+        username = "synthetic.user"
+        auth = cloud.state_file(username)
+        kept = cloud.session_manager.device_state_file(username)
+        for marker in ({}, {"verdict": "ok"}):
+            with self.subTest(marker=marker):
+                auth.write_text("old-auth")
+                kept.write_text("old-kept")
+                response = {"ok": True, "state": "confirmed", **marker}
+                with patch.object(remote, "request", return_value=response):
+                    result = cloud.login({"username": username, "password": "fixture"}, "")
+                self.assertTrue(result["ok"])
+                self.assertNotIn("state", result)
+                self.assertEqual(auth.read_text(), "confirmed")
+                self.assertFalse(kept.exists())
+
     def test_unknown_or_malformed_check_stops_without_network_retry(self):
         replies = ({"data": {"alive": False, "verdict": "unknown", "network": True}},
                    {"data": {"alive": True}, "state_saved": False}, {"data": []}, {})

@@ -323,6 +323,11 @@ def login(acc: dict, proxy: str) -> dict:
             return {"ok": False, "reason": "Сервер не подтвердил вход", "network": False,
                     "verdict": "unknown", "retriable": False, "state_saved": False}
         out = dict(out)
+        if out["ok"] and "verdict" in out and out["verdict"] != "ok":
+            # Legacy success omitted verdict. An explicit conflicting marker
+            # cannot authenticate a replacement state or consume kept devices.
+            return {"ok": False, "reason": "Сервер не подтвердил вход", "network": False,
+                    "verdict": "unknown", "retriable": False, "state_saved": False}
         if out["ok"]:
             token = out.pop("state", None)
             saved = isinstance(token, str) and bool(token.strip()) and out.get("state_saved") is not False
