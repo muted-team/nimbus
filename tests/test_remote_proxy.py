@@ -128,6 +128,18 @@ class RemoteProfileProxyTest(unittest.TestCase):
         self.assertIs(self.calls[-1][3]["json"], payload)
         self.assertEqual(remote._profile_negotiated, {})
 
+    def test_firefox_service_metadata_remains_usable_with_legacy_server(self):
+        def legacy(route, method, url, kwargs):
+            self.calls.append((route, method, url, kwargs))
+            self.assertIn(url, [BASE + p for p in ('/v1/health', '/v1/account', '/v1/history')])
+            return _Response(200, {})
+
+        with patch.object(self, 'transport', side_effect=legacy), client_device.use_browser_profile(PROFILE):
+            for path in ('/v1/health', '/v1/account', '/v1/history'):
+                self.assertEqual(remote.request('GET', path, api_key=TOKEN), RESULT)
+        self.assertEqual(len(self.calls), 3)
+        self.assertEqual(remote._profile_negotiated, {})
+
     def test_firefox_non_string_proxy_is_ignored_by_both_requests(self):
         self.direct_blocked = False
         for proxy in (None, 42, True, {"url": PROXY}, [PROXY]):
