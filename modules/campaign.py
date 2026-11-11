@@ -775,11 +775,18 @@ def _worker_run(acc, slots, caption, title, min_delay_ms, max_delay_ms,
         def check_step(p):
             from . import cloud
             res = cloud.session_check(username, p)
-            return res, bool(res.get("network"))
+            terminal = res.get("stop_account") or res.get("verdict") == "unknown"
+            return res, bool(res.get("network")) and not terminal
 
         # сбой сети на проверке ничего не говорит о сессии: входить заново из-за
         # него нельзя — пересаживаемся на другой прокси и проверяем ещё раз
         alive, network = _net_retry(check_step, held, username)
+        if alive.get("stop_account") or alive.get("verdict") == "unknown":
+            reason = alive.get("error") or "Проверка сессии не подтверждена"
+            _pause_account(username)
+            eventlog.say(reason, "err", username, "campaign")
+            _fail_account(username, reason, processed_counter)
+            return
         if network:
             reason = "сессия не проверена: " + humanize.network(alive.get("error") or "")
             eventlog.say(reason, "err", username, "campaign")
@@ -843,6 +850,8 @@ def _worker_run(acc, slots, caption, title, min_delay_ms, max_delay_ms,
                                            "%d из %d на месте"
                                            % (len(res["failed"]), res["total"]))
                 except Exception as exc:  # noqa: BLE001 — но залив без чистки не запускаем
+                    if getattr(exc, "stop_account", False):
+                        _pause_account(username)
                     print("[campaign] %s: удалить прошлые посты не вышло (%s: %s)"
                           % (username, type(exc).__name__, exc))
                     cleanup_blocked = "прошлые посты не удалены: %s" % humanize.error(exc)

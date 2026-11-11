@@ -234,9 +234,9 @@ def key() -> str:
 
 
 def _protected(method: str, path: str) -> bool:
-    """Вход и подготовка/отправка публикации не повторяются по HTTP-ошибке."""
+    """Вход, загрузка, публикация, удаление и выход отправляются без повтора."""
     return method.upper() == "POST" and (path.rstrip("/") in ("/v1/login", "/v2/login")
-                                        or path.rstrip("/").endswith(("/publish", "/upload")))
+                                        or path.rstrip("/").endswith(("/publish", "/upload", "/posts/delete", "/logout")))
 
 
 def request(method: str, path: str, params: dict = None, json: dict = None,

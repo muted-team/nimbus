@@ -102,6 +102,9 @@ def attempt_via_server(acc, proxy, account_name) -> bool:
     try:
         if not acc.get('password'):
             checked = cloud.session_check(acc['username'], via)
+            if checked.get("stop_account") or checked.get("verdict") == "unknown":
+                _set_reason(checked.get("error") or "Проверка сессии не подтверждена")
+                return False
             owner = str(checked.get('username') or '').lstrip('@')
             ok = checked.get('alive') is True and owner.casefold() == acc['username'].casefold()
             out = {'ok': ok, 'network': checked.get('network', False),

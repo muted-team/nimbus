@@ -203,7 +203,12 @@ def _call(username: str, path: str, body: dict, timeout=LONG) -> dict:
             return _upload_out(username, path, body, out, generation)
         if not isinstance(out, dict):
             raise remote.RemoteError("сервер вернул ответ неверного формата")
-        if not _save(username, out.pop("state", None), generation):
+        try:
+            saved = _save(username, out.pop("state", None), generation)
+        except OSError:
+            raise remote.RemoteError("Не удалось сохранить состояние аккаунта.",
+                                     stop_account=True, outcome_unknown=protected) from None
+        if not saved:
             raise remote.RemoteError("Состояние аккаунта изменено. Ответ не сохранён.", stop_account=True)
         return out
 
@@ -489,9 +494,17 @@ def session_check(username: str, proxy: str) -> dict:
     """Жива ли сессия: {alive, network?, stale?, error?} — как
     session_manager.check_alive. Не вошли вовсе — alive False без сети."""
     try:
-        return _call(username, "/v1/session/check", {"proxy": proxy})["data"]
+        response = _call(username, "/v1/session/check", {"proxy": proxy})
     except remote.RemoteError as exc:
-        return {"alive": False, "network": exc.network, "error": str(exc)}
+        return {"alive": False, "network": exc.network, "error": str(exc),
+                "stop_account": exc.stop_account or exc.outcome_unknown or not exc.network}
+    data = response.get("data")
+    if (not isinstance(data, dict) or type(data.get("alive")) is not bool
+            or data.get("verdict") == "unknown" or data.get("stop_account") is True
+            or response.get("state_saved") is False):
+        return {"alive": False, "network": False, "verdict": "unknown", "stop_account": True,
+                "error": "Проверка сессии не подтверждена. Обработка аккаунта остановлена."}
+    return data
 
 
 def notices(username: str, proxy: str) -> dict:
@@ -504,7 +517,10 @@ def logout(username: str, proxy: str) -> dict:
     """Выход на стороне TikTok. Подтверждён — строка состояния больше не
     нужна и удаляется. {ok, confirmed, error}."""
     out = _call(username, "/v1/logout", {"proxy": proxy})
-    if out.get("confirmed"):
+    if (type(out.get("ok")) is not bool or type(out.get("confirmed")) is not bool
+            or out["confirmed"] and not out["ok"]):
+        raise remote.RemoteError("Результат выхода не подтверждён.", stop_account=True, outcome_unknown=True)
+    if out["confirmed"]:
         state_file(username).unlink(missing_ok=True)
     return out
 

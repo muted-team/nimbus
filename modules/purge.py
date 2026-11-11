@@ -80,9 +80,13 @@ def run_one(username: str, proxy_url, count) -> dict:
     """Снести count последних постов (-1 / "all" — все) через сервер.
     Возвращает {deleted, failed, total}; сбой записывает в итог и пробрасывает.
     Аккаунт вызывающий уже взял через claim."""
-    from . import cloud, humanize
+    from . import cloud, humanize, remote
     try:
         res = cloud.delete_posts(username, proxy_url, count=count)
+        if (res.get("stop_account") or res.get("state_saved") is False
+                or res.get("verdict") in ("unknown", "blocked")):
+            raise remote.RemoteError(res.get("message") or "Удаление не подтверждено. Обработка аккаунта остановлена.",
+                                     stop_account=True, outcome_unknown=res.get("verdict") == "unknown")
     except Exception as exc:  # noqa: BLE001 — итог нужен и при сбое
         note(username, {"error": humanize.error(exc)})
         raise
