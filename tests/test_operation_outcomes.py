@@ -172,6 +172,42 @@ class OperationOutcomesTests(unittest.TestCase):
         failed.assert_called_once()
         held.release.assert_called_once()
 
+    def test_profile_update_dispatches_once_without_redirects(self):
+        for path in ("/v1/profile/update", "/v2/profile/update"):
+            for status in (503, 409, 307, 308):
+                response = SimpleNamespace(status_code=status, headers={},
+                                           json=lambda: {"detail": "synthetic refusal"})
+                with self.subTest(path=path, status=status), \
+                        patch.object(config, "server_wait_min", return_value=1), \
+                        patch.object(remote, "_send", side_effect=[response]) as send, \
+                        patch.object(remote.time, "sleep") as sleep:
+                    with self.assertRaises(remote.RemoteError) as caught:
+                        remote.request("POST", path, api_key="synthetic-key")
+                    self.assertTrue(caught.exception.stop_account)
+                    self.assertFalse(caught.exception.network)
+                    send.assert_called_once()
+                    self.assertIs(send.call_args.kwargs.get("allow_redirects"), False)
+                    sleep.assert_not_called()
+
+    def test_profile_update_does_not_replay_stale_state(self):
+        username = "synthetic.user"
+        auth = cloud.state_file(username)
+        kept = cloud.session_manager.device_state_file(username)
+        for path in ("/v1/profile/update", "/v2/profile/update"):
+            with self.subTest(path=path):
+                auth.write_text("old-auth")
+                kept.write_text("old-kept")
+                with patch.object(cloud, "_state", return_value="old-auth"), \
+                        patch.object(remote, "request", side_effect=remote.RemoteError("stale", 409)) as send:
+                    with self.assertRaises(remote.RemoteError) as caught:
+                        cloud._call(username, path, {})
+                self.assertTrue(caught.exception.stop_account)
+                self.assertFalse(caught.exception.network)
+                send.assert_called_once()
+                self.assertEqual(auth.read_text(), "old-auth")
+                self.assertEqual(kept.read_text(), "old-kept")
+                self.assertIs(send.call_args.kwargs["retry_busy"], False)
+
     def test_delete_and_logout_dispatch_once_without_redirects(self):
         for path in ("/v1/posts/delete", "/v1/logout", "/v2/posts/delete", "/v2/logout"):
             for response in (SimpleNamespace(status_code=503, headers={}), TimeoutError("fixture")):

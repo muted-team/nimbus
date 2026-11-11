@@ -234,9 +234,9 @@ def key() -> str:
 
 
 def _protected(method: str, path: str) -> bool:
-    """Вход, загрузка, публикация, удаление и выход отправляются без повтора."""
+    """Вход, загрузка, публикация, изменение профиля, удаление и выход — без повтора."""
     return method.upper() == "POST" and (path.rstrip("/") in ("/v1/login", "/v2/login", "/v2/legacy/login")
-                                        or path.rstrip("/").endswith(("/publish", "/upload", "/posts/delete", "/logout")))
+                                        or path.rstrip("/").endswith(("/publish", "/upload", "/profile/update", "/posts/delete", "/logout")))
 
 
 def request(method: str, path: str, params: dict = None, json: dict = None,
