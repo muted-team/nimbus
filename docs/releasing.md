@@ -12,7 +12,7 @@
 | :--- | :--- | :--- |
 | Windows x64 | `windows-2022` | `win32-AMD64.zip` |
 | Linux x64 | `ubuntu-24.04` | `linux-x86_64.zip` |
-| macOS · Apple Silicon | `macos-15` | `darwin-arm64.zip` |
+| macOS · Apple Silicon | `macos-26` | `darwin-arm64.zip` |
 | macOS · Intel | `macos-15-intel` | `darwin-x86_64.zip` |
 
 Источники процесса: [ci.yml](../.github/workflows/ci.yml) и
