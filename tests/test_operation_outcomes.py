@@ -156,6 +156,34 @@ class OperationOutcomesTests(unittest.TestCase):
                 stale.assert_not_called()
                 send.assert_called_once()
 
+    def test_nonobject_http_reply_is_terminal_after_a_protected_action(self):
+        for path in ("/v1/posts/delete", "/v1/logout", "/v1/login", "/v1/photos/publish"):
+            for payload in (None, [], "unexpected", 7, False):
+                response = SimpleNamespace(status_code=200, headers={}, json=lambda: payload)
+                with self.subTest(path=path, payload=payload), \
+                        patch.object(remote, "_send", return_value=response) as send, \
+                        patch.object(remote.time, "sleep") as sleep:
+                    with self.assertRaises(remote.RemoteError) as caught:
+                        remote.request("POST", path, api_key="synthetic-key")
+                    self.assertTrue(caught.exception.stop_account)
+                    self.assertTrue(caught.exception.outcome_unknown)
+                    self.assertFalse(caught.exception.network)
+                    send.assert_called_once()
+                    sleep.assert_not_called()
+
+    def test_malformed_delete_or_logout_keeps_state_and_stops_account(self):
+        state = cloud.state_file("synthetic.user")
+        state.write_text("synthetic-old-state")
+        for path in ("/v1/posts/delete", "/v1/logout"):
+            with self.subTest(path=path), patch.object(remote, "request", return_value=[]) as send:
+                with self.assertRaises(remote.RemoteError) as caught:
+                    cloud._call("synthetic.user", path, {})
+                self.assertTrue(caught.exception.stop_account)
+                self.assertTrue(caught.exception.outcome_unknown)
+                self.assertFalse(caught.exception.network)
+                self.assertEqual(state.read_text(), "synthetic-old-state")
+                send.assert_called_once()
+
     def test_purge_does_not_report_success_after_terminal_result(self):
         for flags in ({"stop_account": True}, {"state_saved": False}, {"verdict": "unknown"}):
             result = {"deleted": 0, "failed": [], "total": 0, **flags}

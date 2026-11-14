@@ -318,6 +318,9 @@ def request(method: str, path: str, params: dict = None, json: dict = None,
     if profile_action and browser_profile == "firefox155" and r.headers.get("X-TikTok-Browser-Profile") != browser_profile:
         raise RemoteError("сервер не подтвердил профиль браузера", r.status_code,
                           stop_account=protected, outcome_unknown=protected)
+    if not isinstance(out, dict):
+        raise RemoteError("сервер вернул ответ неверного формата", r.status_code,
+                          stop_account=protected, outcome_unknown=protected)
     return out
 
 

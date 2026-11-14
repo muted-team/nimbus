@@ -210,7 +210,8 @@ def _call(username: str, path: str, body: dict, timeout=LONG) -> dict:
         if upload:
             return _upload_out(username, path, body, out, generation)
         if not isinstance(out, dict):
-            raise remote.RemoteError("сервер вернул ответ неверного формата")
+            raise remote.RemoteError("сервер вернул ответ неверного формата",
+                                     stop_account=protected, outcome_unknown=protected)
         try:
             saved = _save(username, out.pop("state", None), generation)
         except OSError:
