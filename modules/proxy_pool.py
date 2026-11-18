@@ -50,6 +50,10 @@ _health = {}          # адрес прокси -> состояние (см. _en
 _checking = set()     # адреса, которые проверяются прямо сейчас
 _watch = None         # поток перепроверки мёртвых
 _auto = None          # поток автопроверки устаревших (см. _auto_loop)
+_maintenance_pause = threading.Event()
+_maintenance_condition = threading.Condition()
+_maintenance_parked = set()
+
 _wait_said = 0.0      # когда в ленту последний раз писали «ждём прокси»
 
 
@@ -1021,7 +1025,7 @@ def wait_usable(stop=None, timeout: float = WAIT_SEC, task: str = None) -> bool:
 def _ensure_watch() -> None:
     global _watch
     with _lock:
-        if _watch is not None:
+        if _maintenance_pause.is_set() or _watch is not None:
             return
         _watch = threading.Thread(target=_watch_loop, name="proxy-watch", daemon=True)
         _watch.start()
@@ -1033,7 +1037,8 @@ def _watch_loop() -> None:
     global _watch
     delay = RECHECK_MIN
     while True:
-        time.sleep(delay)
+        _maintenance_pause.wait(delay)
+        _maintenance_checkpoint()
         urls = configured()
         with _lock:
             dead = [u for u in urls if _entry(u)["state"] == "dead"]
@@ -1061,7 +1066,7 @@ def _watch_loop() -> None:
 def _ensure_auto_check() -> None:
     global _auto
     with _lock:
-        if _auto is not None:
+        if _maintenance_pause.is_set() or _auto is not None:
             return
         _auto = threading.Thread(target=_auto_loop, name="proxy-auto", daemon=True)
         _auto.start()
@@ -1086,6 +1091,7 @@ def _auto_loop() -> None:
     Списка нет или прокси выключены — configured() пуст, делать нечего."""
     due = []
     while True:
+        _maintenance_checkpoint()
         try:
             due = _due_for_check()
             if due:
@@ -1096,7 +1102,7 @@ def _auto_loop() -> None:
             with _lock:
                 _checking.difference_update(due)
             print(f"[proxy] автопроверка сорвалась: {type(exc).__name__}: {exc}")
-        time.sleep(AUTO_CHECK_TICK)
+        _maintenance_pause.wait(AUTO_CHECK_TICK)
 
 
 # --- для интерфейса ---------------------------------------------------------
@@ -1244,3 +1250,45 @@ def prune(urls) -> None:
         for url in [u for u in _health if u not in keep]:
             _health.pop(url, None)
     _pulse()
+
+
+# Update handoff parks only maintenance loops at a boundary after network work.
+# It does not cancel manual proxy checks, leases, campaigns, or account tasks.
+def _maintenance_checkpoint():
+    with _maintenance_condition:
+        if not _maintenance_pause.is_set():
+            return
+        worker = threading.current_thread()
+        _maintenance_parked.add(worker)
+        _maintenance_condition.notify_all()
+        try:
+            while _maintenance_pause.is_set():
+                _maintenance_condition.wait()
+        finally:
+            _maintenance_parked.discard(worker)
+            _maintenance_condition.notify_all()
+
+
+def pause_for_update(timeout=10):
+    with _lock:
+        _maintenance_pause.set()
+        workers = tuple(t for t in (_watch, _auto) if t is not None)
+    deadline = time.monotonic() + timeout
+    with _maintenance_condition:
+        while any(t.is_alive() and t not in _maintenance_parked for t in workers):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            _maintenance_condition.wait(min(remaining, .1))
+    return True
+
+
+def maintenance_quiescent(worker):
+    with _maintenance_condition:
+        return _maintenance_pause.is_set() and worker in _maintenance_parked
+
+
+def resume_after_update():
+    with _maintenance_condition:
+        _maintenance_pause.clear()
+        _maintenance_condition.notify_all()

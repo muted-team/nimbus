@@ -9,7 +9,7 @@ from pathlib import Path
 
 from PIL import Image, ImageOps
 
-from . import uniq
+from . import paths, uniq
 from .tos_transfer import TOSUploadError
 from .media_info import VIDEO_EXTS
 
@@ -39,7 +39,7 @@ NAME_MAX = 60
 
 
 def library_root() -> Path:
-    return Path(__file__).resolve().parent.parent / LIBRARY_DIR
+    return paths.here(Path(__file__).resolve().parent.parent / LIBRARY_DIR)
 
 
 # сколько свежих фото папки отдавать обложкой её карточки в «Креативах»

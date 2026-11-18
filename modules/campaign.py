@@ -9,6 +9,7 @@ from pathlib import Path
 
 from . import accounts as accounts_mod
 from . import (batch_publish, config, eventlog, humanize, proxy_pool, purge, signin)
+from . import paths
 from . import proxies as proxies_mod
 
 # сколько раз воркер пересаживается на другой прокси, если шаг сорвался на сети
@@ -79,7 +80,7 @@ REPORT_NAME = "campaign_report.json"
 
 def _report_path() -> Path:
     base = REPORT_DIR if REPORT_DIR is not None else (config.ROOT / "logs")
-    return Path(base) / REPORT_NAME
+    return paths.here(Path(base) / REPORT_NAME)
 
 
 def _clamp_repeat(min_sec, max_sec):

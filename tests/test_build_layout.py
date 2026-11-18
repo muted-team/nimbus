@@ -1,0 +1,39 @@
+"""Release assembly keeps the native launcher separate from runtime code."""
+from pathlib import Path
+import tempfile
+import unittest
+from unittest.mock import patch
+
+import build
+
+
+class BuildLayoutTests(unittest.TestCase):
+    def test_runtime_name_and_launcher_metadata(self):
+        for target, binary in [('linux', 'Nimbus-runtime'), ('win32', 'Nimbus-runtime.exe')]:
+            with self.subTest(target=target), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                built, destination = root / 'app.dist', root / 'Nimbus v1.2.3'
+                built.mkdir()
+                (built / binary).write_bytes(b'synthetic runtime')
+                with patch('build.subprocess.run') as compiler:
+                    build.assemble_installation(built, destination, target, '1.2.3')
+                self.assertEqual((destination / '.nimbus-current').read_text(), 'runtime-v1.2.3\n')
+                self.assertEqual((destination / '.nimbus-bootstrap.json').read_text(), '{"format": 1}\n')
+                self.assertEqual((destination / 'runtimes/runtime-v1.2.3' / binary).read_bytes(), b'synthetic runtime')
+                self.assertEqual((destination / "runtimes/runtime-v1.2.3/.nimbus-runtime.json").read_text(), '{"format": 1, "version": "1.2.3"}\n')
+                compiler.assert_called_once()
+                self.assertIn('--output-filename=' + binary, build.nuitka_command(target, root))
+
+    def test_macos_retains_bundle(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            built = root / 'app.app'
+            built.mkdir()
+            with patch('build.subprocess.run') as compiler:
+                build.assemble_installation(built, root / 'Nimbus.app', 'darwin', '1.2.3')
+            compiler.assert_not_called()
+            self.assertTrue((root / 'Nimbus.app').is_dir())
+
+
+if __name__ == '__main__':
+    unittest.main()

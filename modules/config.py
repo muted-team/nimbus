@@ -373,7 +373,7 @@ def clamp_refresh_minutes(value) -> int:
 def path(which: str) -> Path:
     """Абсолютный путь из paths.<which> ('jar'/'ts_guard_config'/'photos_dir')."""
     p = Path(load().get("paths", {}).get(which, DEFAULTS["paths"][which]))
-    return p if p.is_absolute() else ROOT / p
+    return p if p.is_absolute() else paths.here(ROOT / p)
 
 
 def _mask_value(value):

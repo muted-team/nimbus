@@ -12,7 +12,7 @@ UI_DIR = ROOT / "ui"
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from modules import config  # noqa: E402
+from modules import config, update_activity  # noqa: E402
 from modules.console import configure_console  # noqa: E402
 
 configure_console()
@@ -442,6 +442,7 @@ class Handler(BaseHTTPRequestHandler):
 
     # --- маршрутизация ---
 
+    @update_activity.request_handler
     def do_GET(self):
         path = urllib.parse.urlparse(self.path).path
         if not self._allowed(path):
@@ -532,6 +533,7 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self._serve_static(path)
 
+    @update_activity.request_handler
     def do_PUT(self):
         path = urllib.parse.urlparse(self.path).path
         if not self._allowed(path):
@@ -1345,6 +1347,7 @@ class Handler(BaseHTTPRequestHandler):
         payload["errors"] = errors
         self._json(payload)
 
+    @update_activity.request_handler
     def do_POST(self):
         path = urllib.parse.urlparse(self.path).path
         if not self._allowed(path):

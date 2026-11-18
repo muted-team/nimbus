@@ -11,7 +11,9 @@ assert.equal(process.platform, "win32", "Run this check on Windows")
 const source = path.resolve(process.argv[2])
 const output = path.resolve(process.argv[3] || "smoke-results")
 const temporary = await mkdtemp(path.join(os.tmpdir(), "nimbus-package-check-"))
-const expectedVersion = (await readFile(path.join(source, "CHANGELOG.md"), "utf8")).match(/^## (\d+\.\d+\.\d+)/m)?.[1]
+const pointer = (await readFile(path.join(source, ".nimbus-current"), "ascii")).trim()
+assert.match(pointer, /^runtime-v\d+\.\d+\.\d+$/)
+const expectedVersion = (await readFile(path.join(source, "runtimes", pointer, "CHANGELOG.md"), "utf8")).match(/^## (\d+\.\d+\.\d+)/m)?.[1]
 assert.ok(expectedVersion, "Release version is missing")
 const application = path.join(temporary, "Nimbus v" + expectedVersion)
 await cp(source, application, { recursive: true })
@@ -108,7 +110,7 @@ try {
     results.push({ route, rendered: true, ...state })
   }
   const title = await new Promise((resolve, reject) => {
-    const processCheck = spawn("powershell.exe", ["-NoProfile", "-Command", `(Get-Process -Id ${child.pid}).MainWindowTitle`])
+    const processCheck = spawn("powershell.exe", ["-NoProfile", "-Command", `$runtime = Get-CimInstance Win32_Process -Filter "ParentProcessId = ${child.pid}" | Where-Object Name -eq "Nimbus-runtime.exe"; if (-not $runtime) { exit 1 }; (Get-Process -Id $runtime.ProcessId).MainWindowTitle`])
     let text = ""
     processCheck.stdout.on("data", (chunk) => text += chunk)
     processCheck.on("error", reject)

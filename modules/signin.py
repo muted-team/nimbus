@@ -5,7 +5,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import eventlog, proxy_pool
+from . import eventlog, paths, proxy_pool
 from .accounts import load_account
 
 BASE = Path(__file__).resolve().parent.parent
@@ -39,8 +39,8 @@ class _Tee:
     """stdout -> терминал + logs/pure_login.log (по строчкам, с меткой времени)."""
 
     def __init__(self):
-        LOG_DIR.mkdir(exist_ok=True)
-        self._f = open(LOG_FILE, "a", encoding="utf-8", newline="")
+        paths.here(LOG_DIR).mkdir(exist_ok=True)
+        self._f = open(paths.here(LOG_FILE), "a", encoding="utf-8", newline="")
 
     def write(self, text):
         import sys

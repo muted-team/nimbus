@@ -26,6 +26,74 @@ import webbrowser
 from datetime import datetime
 from pathlib import Path
 
+# Retain this object until actual process termination, including worker threads.
+_BOOTSTRAP_GUARD = None
+
+
+def _early_bootstrap():
+    global _BOOTSTRAP_GUARD
+    packaged = bool(getattr(sys, "frozen", False) or "__compiled__" in globals())
+    if not packaged:
+        return
+    from modules import bootstrap
+    executable = Path(sys.executable).absolute()
+    if len(sys.argv) > 1 and sys.argv[1] == "--activate-runtime":
+        if len(sys.argv) != 7:
+            raise bootstrap.BootstrapError("Invalid activation arguments")
+        root, staged, version, expected_digest = sys.argv[2:6]
+        if not re.fullmatch(r"[0-9a-f]{64}", expected_digest):
+            raise bootstrap.BootstrapError("Invalid verified inventory digest")
+        readiness = Path(sys.argv[6]).absolute()
+        ready_sent = False
+        if readiness is not None and (
+                readiness.parent != Path(staged).absolute().parent
+                or not re.fullmatch(r"\.nimbus-activation-ready-[0-9a-f]{32}", readiness.name)):
+            raise bootstrap.BootstrapError("Invalid activation readiness path")
+        def ready():
+            nonlocal ready_sent
+            if readiness is not None:
+                descriptor = os.open(readiness, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                with os.fdopen(descriptor, "w", encoding="ascii") as stream:
+                    stream.write("ready\n")
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                ready_sent = True
+        # Run the helper from the intact CURRENT runtime. Never run it from the
+        # staged directory that must be renamed (Windows holds executable files).
+        if executable != bootstrap.selected_runtime(root) / bootstrap.executable_name():
+            raise bootstrap.BootstrapError("Activation helper is not the current runtime")
+        try:
+            bootstrap.activate(root, staged, version, ready=ready, expected_digest=expected_digest)
+        except Exception:
+            if ready_sent:
+                try:
+                    bootstrap.relaunch_current_if_idle(root)
+                except Exception:
+                    pass  # Never execute code when the selected runtime is invalid.
+            raise
+        try:
+            bootstrap.cleanup_staging(root, staged, version)
+        except (OSError, bootstrap.BootstrapError):
+            pass  # A leftover public package must never prevent application restart.
+        bootstrap.launch(root)
+        raise SystemExit(0)
+    if (executable.name == bootstrap.executable_name()
+            or (executable.parent / bootstrap.RUNTIME_MARKER).exists()):
+        _BOOTSTRAP_GUARD = bootstrap.enter_runtime(executable)
+
+
+if __name__ == "__main__":
+    try:
+        _early_bootstrap()
+    except Exception as _bootstrap_error:
+        # This path deliberately runs before webview, config or user-data imports.
+        if sys.platform == "win32":
+            ctypes.windll.user32.MessageBoxW(0, str(_bootstrap_error), "Nimbus", 0x10)
+        elif sys.stderr is not None:
+            print(str(_bootstrap_error), file=sys.stderr)
+        raise SystemExit(1)
+
+
 def _configure_linux_webview(env, platform: str) -> None:
     """Use the verified GTK/WebKit path when a desktop offers X11 and Wayland."""
     if (platform != "linux" or not env.get("DISPLAY") or not env.get("WAYLAND_DISPLAY")
@@ -52,7 +120,8 @@ _PORT_TRIES = 20
 # (прошлая версия остаётся рабочей) или переносом — креативы бывают на
 # гигабайты, копировать их долго, а на том же диске перенос мгновенный
 _CARRY_COPY = ("config.json", "accounts.json", "banned.json", "data.db",
-               "tiktok_cookies.json", "sessions")
+               "data.db-wal", "data.db-shm", "tiktok_cookies.json", "sessions",
+               "registration", "profile-edits", "browser_states", "proxies.txt")
 _CARRY_MOVE = ("media", "assets")
 
 NL = chr(10)
@@ -60,6 +129,8 @@ NL = chr(10)
 
 def _app_dir() -> Path:
     """Папка приложения: рядом с exe (собранное) или корень проекта (dev)."""
+    if _BOOTSTRAP_GUARD is not None:
+        return Path(os.environ["NIMBUS_BOOTSTRAP_ROOT"])
     if getattr(sys, "frozen", False) or "__compiled__" in globals():
         return Path(sys.executable).resolve().parent
     return Path(__file__).resolve().parent
@@ -201,6 +272,167 @@ class Api:
     main.py напрямую и открытии в обычном браузере window.pywebview
     отсутствует, доступность методов фронт должен определять по нему сам."""
 
+    def __init__(self):
+        self._updates = None
+        self._updates_lock = threading.Lock()
+        self._restart_lock = threading.Lock()
+        self._restart_requested = False
+
+    def _client_updater(self):
+        with self._updates_lock:
+            if self._updates is None:
+                from modules import changelog, client_updates
+                self._updates = client_updates.Updater(_app_dir(), changelog.load()["version"],
+                    packaged=bool(getattr(sys, "frozen", False) or "__compiled__" in globals()),
+                    guarded=_BOOTSTRAP_GUARD is not None, executable=sys.executable)
+            return self._updates
+
+    def check_client_update(self):
+        from modules.client_updates import UpdateError
+        try:
+            return self._client_updater().check()
+        except UpdateError as exc:
+            return {"error": str(exc)}
+        except Exception:
+            return {"error": "Не удалось проверить обновления. Текущая версия сохранена."}
+
+    def prepare_client_update(self):
+        from modules.client_updates import UpdateError
+        try:
+            return self._client_updater().prepare()
+        except UpdateError as exc:
+            return {"error": str(exc)}
+        except Exception:
+            return {"error": "Не удалось подготовить обновление. Текущая версия и данные сохранены."}
+
+    def restart_client_update(self):
+        from modules import bootstrap, proxy_pool, update_activity
+        from modules.client_updates import UpdateError
+        import secrets
+        import subprocess
+
+        def cancel_helper(helper):
+            if helper is None or helper.poll() is not None:
+                return
+            try:
+                helper.terminate()
+                helper.wait(timeout=5)
+            except ProcessLookupError:
+                helper.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                helper.kill()
+                helper.wait(timeout=5)
+
+        if not self._restart_lock.acquire(blocking=False):
+            return {"error": "Перезапуск уже подготавливается"}
+        frozen = False
+        paused = False
+        launched = None
+        readiness = None
+        try:
+            if self._restart_requested:
+                return {"error": "Перезапуск уже запрошен"}
+            if _BOOTSTRAP_GUARD is None or not getattr(webview, "windows", None):
+                raise UpdateError("Для этой установки требуется ручной переход на bootstrap-версию")
+            updater = self._client_updater()
+            updater._exclusive()
+            try:
+                root, staged, version = updater.activation_arguments()
+                expected_digest = updater.activation_digest()
+                update_activity.freeze()
+                frozen = True
+                paused = True
+                if not proxy_pool.pause_for_update():
+                    raise update_activity.UpdateBusy("Дождитесь завершения фоновой проверки прокси")
+                update_activity.assert_idle(root)
+                readiness = Path(staged).parent / (".nimbus-activation-ready-" + secrets.token_hex(16))
+                command = [sys.executable, "--activate-runtime", root, staged, version, expected_digest, str(readiness)]
+                options = {"cwd": root, "close_fds": True, "stdin": subprocess.DEVNULL,
+                           "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
+                if sys.platform != "win32":
+                    options["start_new_session"] = True
+                launched = subprocess.Popen(command, **options)
+                deadline = time.monotonic() + 15
+                while True:
+                    if launched.poll() is not None:
+                        raise UpdateError("Помощник обновления не запустился. Приложение остаётся открытым.")
+                    if readiness.is_symlink():
+                        raise UpdateError("Не удалось подтвердить готовность обновления")
+                    if readiness.exists():
+                        signal = readiness.read_bytes()
+                        if signal == b"ready\n":
+                            break
+                        if signal:
+                            raise UpdateError("Не удалось подтвердить готовность обновления")
+                    if time.monotonic() >= deadline:
+                        raise UpdateError("Помощник обновления не подтвердил готовность. Повторите позже.")
+                    time.sleep(.05)
+                if launched.poll() is not None:
+                    raise UpdateError("Не удалось подтвердить готовность обновления")
+                readiness.unlink()
+                self._restart_requested = True
+                helper = launched
+                # Deliver the bridge response before orderly window/server shutdown.
+                def close_window():
+                    try:
+                        webview.windows[0].destroy()
+                    except Exception:
+                        try:
+                            cancel_helper(helper)
+                        except (OSError, subprocess.TimeoutExpired):
+                            return
+                        self._restart_requested = False
+                        proxy_pool.resume_after_update()
+                        update_activity.unfreeze()
+                timer = threading.Timer(.2, close_window)
+                timer.daemon = True
+                try:
+                    timer.start()
+                except Exception:
+                    self._restart_requested = False
+                    raise
+                launched = None  # The waiting helper owns the handoff now.
+                frozen = paused = False  # Stay frozen/parked until actual process exit.
+                return {"ok": True}
+            finally:
+                updater.lock.release()
+        except (UpdateError, update_activity.UpdateBusy, bootstrap.BootstrapError) as error:
+            return {"error": str(error)}
+        except Exception:
+            return {"error": "Обновление не запущено. Приложение и данные сохранены."}
+        finally:
+            try:
+                cancel_helper(launched)
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+            if readiness is not None and readiness.is_file() and not readiness.is_symlink():
+                try:
+                    readiness.unlink(missing_ok=True)
+                except OSError:
+                    pass
+            if paused:
+                proxy_pool.resume_after_update()
+            if frozen:
+                update_activity.unfreeze()
+            self._restart_lock.release()
+
+    def open_client_update(self):
+        try:
+            staged = self._client_updater().staged
+            if not staged:
+                return {"error": "Сначала скачайте и проверьте обновление"}
+            folder = str(staged[0])
+            if sys.platform == "win32":
+                os.startfile(folder)
+            else:
+                import subprocess
+                subprocess.Popen(["open" if sys.platform == "darwin" else "xdg-open", folder],
+                                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL, start_new_session=True)
+            return {"ok": True}
+        except Exception:
+            return {"error": "Не удалось открыть папку обновления"}
+
     def pick_folder(self):
         """Открывает системный диалог выбора одной папки. Возвращает путь
         строкой, либо None, если пользователь отменил."""
@@ -282,7 +514,8 @@ def _check_ui(window, report: Path) -> None:
 def main() -> int:
     # до импорта сервера: он заводит config.json с настройками по умолчанию,
     # и перенос решил бы, что папка уже обжита
-    _carry_over(_app_dir())
+    if _BOOTSTRAP_GUARD is None:
+        _carry_over(_app_dir())
     import main as server_mod
 
     port = int(sys.argv[1]) if len(sys.argv) > 1 else None

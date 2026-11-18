@@ -9,7 +9,7 @@ import time
 from collections import deque
 from pathlib import Path
 
-from . import config
+from . import config, paths
 
 MAX_ITEMS = 400   # события
 MAX_DEBUG = 1200  # подробности: их много, а нужны только свежие
@@ -123,7 +123,7 @@ class _QuietRotatingHandler(logging.handlers.RotatingFileHandler):
 
 def _events_log_path() -> Path:
     base = EVENTS_LOG_DIR if EVENTS_LOG_DIR is not None else (config.ROOT / "logs")
-    return Path(base) / EVENTS_LOG_NAME
+    return paths.here(Path(base) / EVENTS_LOG_NAME)
 
 
 # Окно чтения файла событий при первом обращении к журналу — весь файл, а не

@@ -50,6 +50,24 @@ jobs:
           sudo ifconfig lo0 alias 127.0.0.3 up
       - run: python -m nuitka --version
       - run: python tools/check_public_tree.py
+      - name: Configure Windows native compiler
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $vs) { throw "Visual C++ x64 compiler is required for the immutable launcher" }
+          $devcmd = Join-Path $vs 'Common7\Tools\VsDevCmd.bat'
+          cmd /s /c "`"`"$devcmd`" -arch=x64 -host_arch=x64 >nul && set`"" | ForEach-Object {
+            if ($_ -match '^PATH=(.*)$') {
+              $Matches[1].Split(';', [StringSplitOptions]::RemoveEmptyEntries) | Select-Object -Unique | ForEach-Object {
+                if ($env:Path.Split(';') -notcontains $_) { $_ >> $env:GITHUB_PATH }
+              }
+            } elseif ($_ -match '^(INCLUDE|LIB|LIBPATH|VCToolsInstallDir|WindowsSdkDir|WindowsSDKVersion|UniversalCRTSdkDir|UCRTVersion)=') {
+              $_ >> $env:GITHUB_ENV
+            }
+          }
+          if ($LASTEXITCODE -ne 0) { throw "Visual C++ environment initialization failed" }
       - run: python tests/run_checks.py
       - run: npm ci
         working-directory: web

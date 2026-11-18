@@ -28,3 +28,9 @@ node_modules/
 *.egg-info/
 nuitka-crash-report.xml
 .DS_Store
+
+# Registration recovery contains credentials and opaque account states.
+registration/
+
+# Private profile-update receipts; no media or auth in UI responses.
+profile-edits/

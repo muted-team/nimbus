@@ -1,5 +1,6 @@
 """Build the open Nimbus client on the target operating system."""
 import argparse
+import json
 import platform
 import shutil
 import subprocess
@@ -13,7 +14,7 @@ def nuitka_command(target: str, output: Path) -> list[str]:
     command = [sys.executable, "-m", "nuitka", "--standalone", "--enable-plugin=pywebview",
                "--assume-yes-for-downloads", "--remove-output",
                "--output-dir=" + str(output),
-               "--output-filename=" + ("Nimbus.exe" if target == "win32" else "Nimbus"),
+               "--output-filename=" + ("Nimbus-runtime.exe" if target == "win32" else "Nimbus-runtime" if target == "linux" else "Nimbus"),
                "--include-data-dir=ui=ui", "--include-data-file=CHANGELOG.md=CHANGELOG.md",
                "--include-data-file=modules/ca.pem=modules/ca.pem",
                "--include-data-file=LICENSE=LICENSE",
@@ -31,6 +32,38 @@ def nuitka_command(target: str, output: Path) -> list[str]:
                 "--nofollow-import-to=tests", str(ROOT / "app.py")]
     return command
 
+
+
+def launcher_command(target: str, destination: Path) -> list[str]:
+    source = str(ROOT / "native" / "bootstrap.cpp")
+    if target == "win32":
+        return ["cl", "/nologo", "/EHsc", "/std:c++17", "/MT", source,
+                "/Fe:" + str(destination / "Nimbus.exe"),
+                "/Fo:" + str(destination / "bootstrap.obj"),
+                "/link", "/SUBSYSTEM:WINDOWS", "user32.lib"]
+    if target == "linux":
+        return ["g++", "-std=c++17", "-O2", "-static-libstdc++", "-static-libgcc",
+                source, "-o", str(destination / "Nimbus")]
+    raise ValueError("Native bootstrap is supported on Linux and Windows")
+
+
+def assemble_installation(built: Path, destination: Path, target: str, version: str) -> None:
+    """Package runtime and stable launcher; never copy userdata into a release."""
+    if target not in ("linux", "win32"):
+        built.rename(destination)
+        return
+    runtime_name = "runtime-v" + version
+    destination.mkdir()
+    runtimes = destination / "runtimes"
+    runtimes.mkdir()
+    runtime = runtimes / runtime_name
+    built.rename(runtime)
+    (runtime / ".nimbus-runtime.json").write_text(json.dumps({"format": 1, "version": version}) + "\n", encoding="ascii")
+    subprocess.run(launcher_command(target, destination), cwd=ROOT, check=True)
+    # Compiler intermediates do not belong in the distribution.
+    (destination / "bootstrap.obj").unlink(missing_ok=True)
+    (destination / ".nimbus-bootstrap.json").write_text(json.dumps({"format": 1}) + "\n", encoding="ascii")
+    (destination / ".nimbus-current").write_text(runtime_name + "\n", encoding="ascii")
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -65,7 +98,7 @@ def main() -> int:
     for extra in built.rglob("pywebview-android.jar"):
         extra.unlink()
     destination = output / ("Nimbus.app" if target == "darwin" else "Nimbus v" + version)
-    built.rename(destination)
+    assemble_installation(built, destination, target, version)
     archive = ROOT / "dist" / ("nimbus-" + version + "-" + target + "-" + platform.machine())
     archive.parent.mkdir(exist_ok=True)
     shutil.make_archive(str(archive), "zip", root_dir=destination.parent, base_dir=destination.name)

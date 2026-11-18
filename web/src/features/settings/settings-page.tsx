@@ -5,6 +5,7 @@ import { saveSettings, useSettings } from "@/api/misc"
 import type { BrowserProfile, ProxyOnDeath, Settings, SettingsPatch } from "@/api/types"
 import { sectionTitle } from "@/app/sections"
 import { NumberInput, parseNumber } from "@/components/number-input"
+import { ClientUpdates } from "@/components/client-updates"
 import { Page, PageBody, PageHeader } from "@/components/page"
 import { QueryView } from "@/components/state-view"
 import { SimpleSelect } from "@/components/simple-select"
@@ -174,6 +175,7 @@ function SettingsForm({ settings }: { settings: Settings }) {
         </SettingRow>
       </SettingsGroup>
       <ServerPanel server={settings.server} />
+      <ClientUpdates />
       {settings.password.available ? <PasswordPanel password={settings.password} /> : null}
       <PhonePanel phone={settings.phone} password={settings.password} />
     </>

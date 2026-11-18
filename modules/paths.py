@@ -1,11 +1,15 @@
 """Context-local data paths for normal execution and isolated tests."""
 import contextlib
 import contextvars
+import os
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
-_root = contextvars.ContextVar("data_root", default=ROOT)
+# The immutable launcher supplies the installation root before importing code.
+# A versioned runtime must never become the default userdata directory.
+DATA_ROOT = Path(os.environ["NIMBUS_DATA_ROOT"]).resolve() if os.environ.get("NIMBUS_DATA_ROOT") else ROOT
+_root = contextvars.ContextVar("data_root", default=DATA_ROOT)
 
 
 def here(path: Path) -> Path:
