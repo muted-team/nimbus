@@ -30,13 +30,28 @@ from pathlib import Path
 _BOOTSTRAP_GUARD = None
 
 
+def _runtime_executable() -> Path:
+    # A standalone Nuitka process can report a bundled interpreter path that
+    # does not exist. Bootstrap must identify the OS process image instead.
+    if "__compiled__" in globals():
+        if sys.platform == "linux":
+            return Path("/proc/self/exe").readlink()
+        if sys.platform == "win32":
+            buffer = ctypes.create_unicode_buffer(32768)
+            length = ctypes.windll.kernel32.GetModuleFileNameW(None, buffer, len(buffer))
+            if not 0 < length < len(buffer):
+                raise OSError("Cannot identify the running Nimbus executable")
+            return Path(buffer.value)
+    return Path(sys.executable).absolute()
+
+
 def _early_bootstrap():
     global _BOOTSTRAP_GUARD
     packaged = bool(getattr(sys, "frozen", False) or "__compiled__" in globals())
     if not packaged:
         return
     from modules import bootstrap
-    executable = Path(sys.executable).absolute()
+    executable = _runtime_executable()
     if len(sys.argv) > 1 and sys.argv[1] == "--activate-runtime":
         if len(sys.argv) != 7:
             raise bootstrap.BootstrapError("Invalid activation arguments")
@@ -285,7 +300,7 @@ class Api:
                 from modules import changelog, client_updates
                 self._updates = client_updates.Updater(_app_dir(), changelog.load()["version"],
                     packaged=bool(getattr(sys, "frozen", False) or "__compiled__" in globals()),
-                    guarded=_BOOTSTRAP_GUARD is not None, executable=sys.executable)
+                    guarded=_BOOTSTRAP_GUARD is not None, executable=_runtime_executable())
             return self._updates
 
     def check_client_update(self):
@@ -347,7 +362,7 @@ class Api:
                     raise update_activity.UpdateBusy("Дождитесь завершения фоновой проверки прокси")
                 update_activity.assert_idle(root)
                 readiness = Path(staged).parent / (".nimbus-activation-ready-" + secrets.token_hex(16))
-                command = [sys.executable, "--activate-runtime", root, staged, version, expected_digest, str(readiness)]
+                command = [str(_runtime_executable()), "--activate-runtime", root, staged, version, expected_digest, str(readiness)]
                 options = {"cwd": root, "close_fds": True, "stdin": subprocess.DEVNULL,
                            "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
                 if sys.platform != "win32":

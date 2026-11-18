@@ -24,6 +24,31 @@ def load_app():
 
 
 class PlatformTests(unittest.TestCase):
+    @unittest.skipUnless(sys.platform == "linux", "Linux process image path")
+    def test_compiled_linux_uses_process_image_instead_of_reported_python(self):
+        app = load_app()
+        expected = Path("/proc/self/exe").readlink()
+        missing = str(expected.parent / "missing-embedded-python")
+        with patch.object(app, "__compiled__", object(), create=True), patch.object(sys, "executable", missing):
+            self.assertEqual(app._runtime_executable(), expected)
+
+    def test_compiled_windows_uses_unicode_image_path_and_rejects_truncation(self):
+        app = load_app()
+        executable = str(Path.cwd() / "Nimbus Ж 目录" / "Nimbus-runtime.exe")
+
+        def get_image(module, buffer, size):
+            buffer.value = executable
+            return len(executable)
+
+        get_module_name = Mock(side_effect=get_image)
+        dll = types.SimpleNamespace(kernel32=types.SimpleNamespace(GetModuleFileNameW=get_module_name))
+        with (patch.object(app, "__compiled__", object(), create=True), patch.object(sys, "platform", "win32"),
+              patch.object(app.ctypes, "windll", dll, create=True)):
+            self.assertEqual(app._runtime_executable(), Path(executable))
+            get_module_name.side_effect = lambda module, buffer, size: size
+            with self.assertRaises(OSError):
+                app._runtime_executable()
+
     @unittest.skipIf(sys.platform == "win32", "Linux socket reuse semantics")
     def test_linux_port_probe_reuses_closed_connection_but_rejects_active_listener(self):
         app = load_app()
