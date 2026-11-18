@@ -52,9 +52,10 @@ def _early_bootstrap():
         def ready():
             nonlocal ready_sent
             if readiness is not None:
-                descriptor = os.open(readiness, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-                with os.fdopen(descriptor, "w", encoding="ascii") as stream:
-                    stream.write("ready\n")
+                flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
+                descriptor = os.open(readiness, flags, 0o600)
+                with os.fdopen(descriptor, "wb") as stream:
+                    stream.write(b"ready\n")
                     stream.flush()
                     os.fsync(stream.fileno())
                 ready_sent = True

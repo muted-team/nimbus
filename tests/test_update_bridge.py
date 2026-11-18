@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from tests.test_app_platform import load_app
-from modules import proxy_pool, update_activity
+from modules import bootstrap, proxy_pool, update_activity
 from modules.client_updates import UpdateError
 
 
@@ -30,6 +30,41 @@ class BridgeTests(unittest.TestCase):
         api = app.Api()
         api._client_updater = Mock(return_value=updater)
         return app, api, updater
+
+    def test_activation_helper_writes_platform_independent_readiness(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            app = load_app()
+            root = Path(temporary).resolve()
+            current = root / "current"
+            staged = root / "staging" / "runtime"
+            staged.parent.mkdir()
+            marker = staged.parent / (".nimbus-activation-ready-" + "a" * 32)
+            executable = current / bootstrap.executable_name()
+            arguments = [str(executable), "--activate-runtime", str(root), str(staged),
+                         "1.0.3", "f" * 64, str(marker)]
+            fdopen = app.os.fdopen
+
+            def windows_fdopen(descriptor, mode, **options):
+                if "b" not in mode:
+                    options["newline"] = "\r\n"
+                return fdopen(descriptor, mode, **options)
+
+            def activate(*args, ready, expected_digest):
+                ready()
+
+            with (patch.object(app.sys, "frozen", True, create=True),
+                  patch.object(app.sys, "executable", str(executable)),
+                  patch.object(app.sys, "argv", arguments),
+                  patch.object(app.os, "fdopen", side_effect=windows_fdopen),
+                  patch.object(bootstrap, "selected_runtime", return_value=current),
+                  patch.object(bootstrap, "activate", side_effect=activate),
+                  patch.object(bootstrap, "cleanup_staging"),
+                  patch.object(bootstrap, "launch"),
+                  self.assertRaises(SystemExit) as exit_status):
+                app._early_bootstrap()
+
+            self.assertEqual(exit_status.exception.code, 0)
+            self.assertEqual(marker.read_bytes(), b"ready\n")
 
     def test_ready_helper_precedes_window_close_and_only_one_handoff(self):
         with tempfile.TemporaryDirectory() as temporary:
