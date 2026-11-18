@@ -70,10 +70,18 @@ class UpdatesTests(unittest.TestCase):
         ):
             with self.subTest(name=name), tempfile.TemporaryDirectory() as folder:
                 archive = io.BytesIO()
+                written_name = name.replace("\\", "/")
                 with zipfile.ZipFile(archive, "w") as z:
-                    z.writestr(name, b"malicious")
-                archive.seek(0)
-                with self.assertRaises(u.UpdateError):
+                    z.writestr(written_name, b"synthetic input")
+                archive = io.BytesIO(archive.getvalue().replace(written_name.encode(), name.encode()))
+                zip_info_init = zipfile.ZipInfo.__init__
+
+                def windows_zip_info(item, filename, *args):
+                    zip_info_init(item, filename, *args)
+                    item.filename = item.filename.replace("\\", "/")
+
+                with (patch.object(zipfile.ZipInfo, "__init__", windows_zip_info),
+                      self.assertRaises(u.UpdateError)):
                     u.extract_archive(archive, Path(folder), "Nimbus v1.0.3")
                 self.assertEqual(list(Path(folder).iterdir()), [])
 

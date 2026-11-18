@@ -78,7 +78,8 @@ def extract_archive(archive, destination, root_name):
         for member in members:
             path = PurePosixPath(member.filename)
             mode = member.external_attr >> 16
-            if (not path.parts or path.parts[0] != root_name or ".." in path.parts
+            if (member.orig_filename != member.filename or not path.parts
+                    or path.parts[0] != root_name or ".." in path.parts
                     or path.is_absolute() or "\\" in member.filename or ":" in member.filename
                     or stat.S_ISLNK(mode) or (stat.S_IFMT(mode) not in (0, stat.S_IFREG, stat.S_IFDIR))
                     or (len(path.parts) > 1 and path.parts[1].casefold() in {n.casefold() for n in RESERVED_USER_DATA})
