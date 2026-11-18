@@ -15,9 +15,15 @@ class BuildLayoutTests(unittest.TestCase):
                 built, destination = root / 'app.dist', root / 'Nimbus v1.2.3'
                 built.mkdir()
                 (built / binary).write_bytes(b'synthetic runtime')
-                with patch('build.subprocess.run') as compiler:
+                write_text = Path.write_text
+
+                def windows_write_text(path, data, **options):
+                    return write_text(path, data, **{"newline": "\r\n", **options})
+
+                with (patch('build.subprocess.run') as compiler,
+                      patch.object(Path, "write_text", windows_write_text)):
                     build.assemble_installation(built, destination, target, '1.2.3')
-                self.assertEqual((destination / '.nimbus-current').read_text(), 'runtime-v1.2.3\n')
+                self.assertEqual((destination / '.nimbus-current').read_bytes(), b'runtime-v1.2.3\n')
                 self.assertEqual((destination / '.nimbus-bootstrap.json').read_text(), '{"format": 1}\n')
                 self.assertEqual((destination / 'runtimes/runtime-v1.2.3' / binary).read_bytes(), b'synthetic runtime')
                 self.assertEqual((destination / "runtimes/runtime-v1.2.3/.nimbus-runtime.json").read_text(), '{"format": 1, "version": "1.2.3"}\n')

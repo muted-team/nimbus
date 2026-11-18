@@ -29,6 +29,7 @@ class PackageLayoutTests(unittest.TestCase):
             self.assertTrue(check(self.package(folder, missing='.nimbus-runtime.json')))
             self.assertTrue(check(self.package(folder, pointer='../elsewhere')))
             self.assertTrue(check(self.package(folder, pointer='runtime-v9.9.9')))
+            self.assertTrue(check(self.package(folder, pointer='runtime-v1.2.3\r\n')))
 
     def test_macos_bundle(self):
         with tempfile.TemporaryDirectory() as folder:

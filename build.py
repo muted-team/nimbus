@@ -63,7 +63,7 @@ def assemble_installation(built: Path, destination: Path, target: str, version: 
     # Compiler intermediates do not belong in the distribution.
     (destination / "bootstrap.obj").unlink(missing_ok=True)
     (destination / ".nimbus-bootstrap.json").write_text(json.dumps({"format": 1}) + "\n", encoding="ascii")
-    (destination / ".nimbus-current").write_text(runtime_name + "\n", encoding="ascii")
+    (destination / ".nimbus-current").write_bytes((runtime_name + "\n").encode("ascii"))
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)

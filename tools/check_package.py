@@ -25,7 +25,7 @@ def check(path: Path) -> list[str]:
                 pointer = pointers[0]
                 prefix = pointer.removesuffix('.nimbus-current')
                 try:
-                    runtime = archive.read(pointer).decode('ascii').strip()
+                    runtime = archive.read(pointer).decode('ascii').removesuffix('\n')
                     if not re.fullmatch(r'runtime-v\d+\.\d+\.\d+', runtime):
                         raise ValueError('Invalid runtime pointer')
                     marker = json.loads(archive.read(prefix + '.nimbus-bootstrap.json'))
