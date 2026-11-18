@@ -58,7 +58,23 @@ jobs:
           $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
           if (-not $vs) { throw "Visual C++ x64 compiler is required for the immutable launcher" }
           $devcmd = Join-Path $vs 'Common7\Tools\VsDevCmd.bat'
-          cmd /s /c "`"`"$devcmd`" -arch=x64 -host_arch=x64 >nul && set`"" | ForEach-Object {
+          $script = Join-Path $env:RUNNER_TEMP "nimbus-vs-env-$PID.cmd"
+          @(
+            '@echo off'
+            ('call "{0}" -arch=x64 -host_arch=x64 >nul' -f $devcmd)
+            'if errorlevel 1 exit /b 1'
+            'where cl.exe >nul || exit /b 1'
+            'set'
+          ) | Set-Content -LiteralPath $script -Encoding ascii
+          Push-Location $env:RUNNER_TEMP
+          try {
+            $compilerEnvironment = & cmd.exe /d /c (Split-Path -Leaf $script)
+            if ($LASTEXITCODE -ne 0) { throw "Visual C++ environment initialization failed" }
+          } finally {
+            Pop-Location
+            Remove-Item -LiteralPath $script
+          }
+          $compilerEnvironment | ForEach-Object {
             if ($_ -match '^PATH=(.*)$') {
               $Matches[1].Split(';', [StringSplitOptions]::RemoveEmptyEntries) | Select-Object -Unique | ForEach-Object {
                 if ($env:Path.Split(';') -notcontains $_) { $_ >> $env:GITHUB_PATH }
@@ -67,7 +83,6 @@ jobs:
               $_ >> $env:GITHUB_ENV
             }
           }
-          if ($LASTEXITCODE -ne 0) { throw "Visual C++ environment initialization failed" }
       - run: python tests/run_checks.py
       - run: npm ci
         working-directory: web
