@@ -12,6 +12,7 @@ ACCOUNTS_FILE = BASE / "accounts.json"
 # публикации, но не потеряны совсем — лежат тут со временем и причиной бана,
 # формат {"accounts": [{...запись..., "banned_at", "ban_reason"}]}.
 BANNED_FILE = BASE / "banned.json"
+_SESSION_METADATA = ("registration_job", "registration_proxy", "state_kind", "http_disabled", "registration_mode", "registration_uid")
 
 # add_account может зваться из HTTP-потоков, _rotate_to_end кампании —
 # из фонового потока: одновременные записи файла сериализуем локом.
@@ -239,6 +240,9 @@ def add_accounts_bulk(text: str) -> dict:
                 for k in ("email", "email_password", "totp_secret"):
                     if k not in entry and isinstance(old.get(k), str) and old[k].strip():
                         entry[k] = old[k]
+                for key in _SESSION_METADATA:
+                    if key in old:
+                        entry[key] = old[key]
                 replaced = sorted(k for k in entry
                                   if k != "username" and old.get(k) != entry[k])
                 accounts[idx] = entry
@@ -330,6 +334,9 @@ def add_account(data: dict) -> dict:
         if idx is None:
             accounts.append(entry)
         else:
+            for key in _SESSION_METADATA:
+                if key in accounts[idx]:
+                    entry[key] = accounts[idx][key]
             accounts[idx] = entry
         _write_json(paths.here(ACCOUNTS_FILE), raw)
 
@@ -397,6 +404,10 @@ def update_account(username: str, patch: dict) -> dict:
         old = accounts[idx]
 
         final_username = new_username if new_username is not None else username
+        if final_username != username and old.get("registration_job"):
+            from . import client_session
+            if any(path.exists() for path in client_session._account_files(username) if path.name.endswith(".state")):
+                raise ValueError("Сохранённый вход привязан к прежней записи. Смена username выполняется через «Профиль TikTok»; локальную запись сейчас переименовать нельзя")
         if final_username != username and any(
                 isinstance(a, dict) and a.get("username") == final_username
                 for a in accounts):
@@ -406,6 +417,9 @@ def update_account(username: str, patch: dict) -> dict:
         if not final_password and (old.get('password') or not _has_session(username)):
             raise ValueError('Для аккаунта без сохранённой сессии нужен пароль')
         entry = {"username": final_username}
+        for key in _SESSION_METADATA:
+            if key in old:
+                entry[key] = old[key]
         if final_password:
             entry['password'] = final_password
         for key, incoming in (("totp_secret", totp), ("email", email),

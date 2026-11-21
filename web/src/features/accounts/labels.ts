@@ -82,6 +82,7 @@ export const HEAD_ACTION = localize({
 } as const)
 
 export const RUN_VERB = localize({
+  register: "Регистрирую",
   login: "Вхожу",
   clearSession: "Забываю вход",
   logout: "Выхожу",
@@ -237,6 +238,7 @@ export const replacedWords = (fields: string[]) => [
 /* Прогон уже идёт, а просят другой — называем работу существительным:
    «идёт вход» читается, «идёт вхожу» — нет. */
 const RUN_NOUN = localize({
+  register: "регистрация",
   login: "вход",
   clearSession: "забывание входа",
   logout: "выход из аккаунта",
@@ -246,16 +248,16 @@ const RUN_NOUN = localize({
 
 export const RUN_TOAST = localize({
   otherRunning: (
-    kind: "login" | "clearSession" | "logout" | "purge" | "delete"
+    kind: "register" | "login" | "clearSession" | "logout" | "purge" | "delete"
   ) => t("Сейчас идёт {0}. Дождитесь или остановите.", [RUN_NOUN[kind]]),
   done: (
-    kind: "login" | "clearSession" | "logout" | "purge" | "delete",
+    kind: "register" | "login" | "clearSession" | "logout" | "purge" | "delete",
     stopped: boolean,
     ok: number,
     total: number
   ) => {
     const what =
-      kind === "login"
+      kind === "register" ? t("зарегистрированы") : kind === "login"
         ? t("вошли")
         : kind === "clearSession"
           ? t("забыт вход у")

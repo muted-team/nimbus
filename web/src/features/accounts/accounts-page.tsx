@@ -65,7 +65,9 @@ import {
 import { AccountsTable } from "./accounts-table"
 import { COLUMNS, gridTemplate, useTier, visibleColumns } from "./columns"
 import { AddPanel } from "./add-panel"
+import { RegistrationPanel } from "./registration-panel"
 import { ProfileEditPanel } from "./profile-edit-panel"
+import { t } from "@/lib/i18n"
 import type { Account } from "@/api/types"
 import { BannedBlock } from "./banned-block"
 import {
@@ -179,6 +181,7 @@ export default function AccountsPage() {
 
   const run = useAccountsRun((s) => s.run)
   const [adding, setAdding] = useState(false)
+  const [registering, setRegistering] = useState(false)
   const [profileEditing, setProfileEditing] = useState<Account | null>(null)
   const [editing, setEditing] = useState<string | null>(null)
 
@@ -830,6 +833,7 @@ export default function AccountsPage() {
                 ) : null}
               </>
             )}
+            <Button variant="outline" disabled={campOn} onClick={() => setRegistering(true)}>{t("Создать аккаунт")}</Button>
             <Button onClick={() => setAdding(true)}>
               <PlusIcon />
               {HEAD_ACTION.add}
@@ -839,6 +843,7 @@ export default function AccountsPage() {
       />
       <PageBody bleed>
         {list}
+        {registering ? <RegistrationPanel onClose={() => setRegistering(false)} /> : null}
         {adding ? <AddPanel onClose={() => setAdding(false)} /> : null}
         {editingAccount ? <EditPanel account={editingAccount} onClose={() => setEditing(null)} onProfile={() => { setProfileEditing(editingAccount); setEditing(null) }} /> : null}
         {profileEditing ? <ProfileEditPanel key={profileEditing.username} account={profileEditing} onClose={() => setProfileEditing(null)} /> : null}

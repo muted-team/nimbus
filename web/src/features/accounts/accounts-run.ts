@@ -10,7 +10,14 @@ import {
   refreshAccounts,
   refreshAccountsSoon,
 } from "@/api/accounts"
-import { api } from "@/api/client"
+import { api, ApiError } from "@/api/client"
+import {
+  startRegistration,
+  registrationStatus,
+  type RegistrationInput,
+  type RegistrationStatus,
+} from "@/api/registration"
+import { registrationPolling } from "./registration-view"
 import type { PurgeResult } from "@/api/types"
 import { notify } from "@/lib/notify"
 
@@ -22,7 +29,8 @@ import { ACC_TOAST, RUN_TOAST, RUN_VERB } from "./labels"
    Остановка — после текущего аккаунта; 409 на входе значит, что идёт
    публикация, тогда встаём целиком. */
 
-export type RunKind = "login" | "clearSession" | "logout" | "purge" | "delete"
+export type RunKind =
+  "register" | "login" | "clearSession" | "logout" | "purge" | "delete"
 
 /* Больше дорожек, чем разрешает браузер, только вредит: к одному адресу он
    держит шесть соединений, одно занято живым потоком событий. Лишние входы
@@ -46,12 +54,20 @@ interface RunStore {
   run: AccountsRun | null
   /** остановка запрошена: прогон встанет, доработав текущие аккаунты */
   stopping: boolean
+  registrationCurrent: RegistrationStatus | null
+  registrationResults: RegistrationStatus[]
+  registrationPollError: string | null
+  setRegistrationResults: (results: RegistrationStatus[]) => void
   requestStop: () => void
 }
 
 export const useAccountsRun = create<RunStore>((set) => ({
   run: null,
   stopping: false,
+  registrationCurrent: null,
+  registrationResults: [],
+  registrationPollError: null,
+  setRegistrationResults: (registrationResults) => set({ registrationResults }),
   requestStop: () =>
     set((s) => ({
       stopping: true,
@@ -98,6 +114,7 @@ let live: {
 } | null = null
 
 export interface RunOptions {
+  registration?: RegistrationInput
   /** только для kind === "delete": перед удалением попробовать настоящий
       выход у TikTok. Сбой выхода удаление не отменяет — это подстраховка,
       а не условие; в отчёт попадает только исход самого удаления. */
@@ -118,7 +135,7 @@ export function startRun(
   if (live) {
     // тот же вид работы — просто дописываем в очередь; другой — это уже
     // другой прогресс, второй одновременно показывать негде
-    if (live.kind === kind) live.add(queue)
+    if (live.kind === kind && kind !== "register") live.add(queue)
     else notify.warn(RUN_TOAST.otherRunning(live.kind))
     return
   }
@@ -148,7 +165,16 @@ export function startRun(
         current: [...state.current],
       },
     })
-  useAccountsRun.setState({ stopping: false })
+  useAccountsRun.setState({
+    stopping: false,
+    ...(kind === "register"
+      ? {
+          registrationResults: [],
+          registrationCurrent: null,
+          registrationPollError: null,
+        }
+      : {}),
+  })
   commit()
 
   const fail = (username: string, reason: string) => {
@@ -167,7 +193,64 @@ export function startRun(
       state.current.push(username)
       commit()
       try {
-        if (kind === "login") {
+        if (kind === "register") {
+          if (!opts.registration)
+            throw new Error(t("Не заданы параметры регистрации"))
+          let result = await startRegistration(opts.registration)
+          useAccountsRun.setState({ registrationCurrent: result })
+          const jobId = result.job_id
+          const scope = result.scope
+          while (registrationPolling(result)) {
+            await new Promise((resolve) => setTimeout(resolve, 2_000))
+            let next: RegistrationStatus
+            try {
+              next = await registrationStatus()
+            } catch (error) {
+              if (
+                error instanceof ApiError &&
+                error.status >= 400 &&
+                error.status < 500 &&
+                error.status !== 408
+              )
+                throw error
+              // The admitted job may still be running. Stop the remaining queue,
+              // but recover its status with GET only; never repeat admission.
+              useAccountsRun.getState().requestStop()
+              useAccountsRun.setState({
+                registrationPollError:
+                  t(
+                    "Не удалось проверить задание. Проверка продолжится; создание аккаунта не повторяется"
+                  ) + (error instanceof Error ? `: ${error.message}` : ""),
+              })
+              continue
+            }
+            useAccountsRun.setState({ registrationPollError: null })
+            if (next.job_id !== jobId || (scope && next.scope !== scope))
+              throw new Error(
+                t("Сервер или задание изменились. Очередь остановлена")
+              )
+            result = next
+            useAccountsRun.setState({ registrationCurrent: result })
+          }
+          useAccountsRun.setState((store) => ({
+            registrationResults: [...store.registrationResults, result],
+          }))
+          const badSelection = ["unknown", "blocked"].includes(
+            result.username_selection?.status ?? ""
+          )
+          if (
+            result.status === "complete" &&
+            result.account_saved === true &&
+            result.billing_status !== "unknown" &&
+            !badSelection
+          )
+            state.ok += 1
+          else {
+            fail(username, result.reason || t("Регистрация не подтверждена"))
+            useAccountsRun.getState().requestStop()
+          }
+          await refreshAccounts()
+        } else if (kind === "login") {
           const res = await loginAccount(username)
           if (res.ok) state.ok += 1
           else if (res.banned)
@@ -201,6 +284,26 @@ export function startRun(
           state.ok += 1
         }
       } catch (error) {
+        if (kind === "register") {
+          useAccountsRun.getState().requestStop()
+          useAccountsRun.setState((store) => ({
+            registrationResults: [
+              ...store.registrationResults,
+              {
+                status:
+                  error instanceof ApiError &&
+                  error.status >= 400 &&
+                  error.status < 500
+                    ? "failed"
+                    : "interrupted_or_unknown",
+                reason:
+                  error instanceof Error
+                    ? error.message
+                    : t("Результат регистрации неизвестен"),
+              },
+            ],
+          }))
+        }
         const status = (error as { status?: number }).status
         if (kind === "login" && status === 409) {
           state.campStopped = true

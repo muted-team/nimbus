@@ -281,6 +281,30 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self._json(result)
 
+    def _api_registration(self, action):
+        from modules import registration, remote
+        if action in ("start", "cancel") and self._campaign_running():
+            self._json({"error": "Дождитесь завершения публикации"}, 409)
+            return
+        body = None
+        if action == "start":
+            body, error = self._read_json()
+            if error:
+                self._json({"error": error}, 400)
+                return
+        try:
+            result = registration.start(body) if action == "start" else getattr(registration, action)()
+        except ValueError as exc:
+            self._json({"error": str(exc)}, 400)
+        except registration.proxy_pool.NoAliveProxy as exc:
+            self._json({"error": str(exc)}, 409)
+        except remote.RemoteError:
+            self._json({"error": "Сервер не подтвердил результат. Проверьте задание перед повтором"}, 502)
+        except (OSError, TypeError, KeyError):
+            self._json({"error": "Не удалось сохранить результат регистрации. Не повторяйте создание аккаунта"}, 500)
+        else:
+            self._json(result)
+
     def _json(self, obj, status: int = 200, headers=()):
         # тело запроса дочитываем ДО ответа, даже если обработчику оно не нужно:
         # иначе его остаток уедет в следующий запрос по тому же соединению
@@ -477,6 +501,12 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/auth":
             self._api_auth_get()
+        elif path == "/api/registration/capabilities":
+            self._api_registration("capabilities")
+        elif path == "/api/registration/history":
+            self._api_registration("history")
+        elif path == "/api/registration":
+            self._api_registration("status")
         elif path == "/api/config":
             self._json({"config": config.masked(), "file": config.CONFIG_FILE.name})
         elif path == "/api/proxies":
@@ -1418,6 +1448,10 @@ class Handler(BaseHTTPRequestHandler):
             self._api_auth_login()
         elif path in ("/api/tiktok-profile/info", "/api/tiktok-profile/plan", "/api/tiktok-profile/update"):
             self._api_profile_edit(path.rsplit("/", 1)[1])
+        elif path == "/api/registration":
+            self._api_registration("start")
+        elif path == "/api/registration/cancel":
+            self._api_registration("cancel")
         elif path == "/api/auth/logout":
             self._api_auth_logout()
         elif path == "/api/slots":
