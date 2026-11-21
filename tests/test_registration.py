@@ -2,6 +2,7 @@
 
 import contextlib
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -63,7 +64,7 @@ class RegistrationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             reg.start(self.body)
         self.assertNotIn(
-            "anymessage_token", (self.root / "registration/current.json").read_text()
+            "anymessage_token", (self.root / "registration/current.json").read_text(encoding="utf-8")
         )
 
     def test_completed_account_states_saved_separately_without_secrets_to_ui(self):
@@ -88,7 +89,8 @@ class RegistrationTests(unittest.TestCase):
         self.assertEqual(
             state.with_suffix(".browser.state").read_text(), "OPAQUE_BROWSER_STATE"
         )
-        self.assertEqual(state.stat().st_mode & 0o777, 0o600)
+        if os.name != "nt":
+            self.assertEqual(state.stat().st_mode & 0o777, 0o600)
         self.assertEqual(
             accounts._read_raw()["accounts"][0]["password"], "SYNTHETIC_PASSWORD"
         )

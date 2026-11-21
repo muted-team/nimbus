@@ -58,7 +58,7 @@ def _load():
     file = _directory() / "current.json"
     if not file.exists():
         return None
-    row = json.loads(file.read_text())
+    row = json.loads(file.read_text(encoding="utf-8"))
     if row.get("owner") != _owner():
         return None
     return row
@@ -101,7 +101,7 @@ def history():
             key=lambda p: p.stat().st_mtime_ns,
             reverse=True,
         )[:100]:
-            row = json.loads(path.read_text())
+            row = json.loads(path.read_text(encoding="utf-8"))
             if isinstance(row, dict) and row.get("owner") == _owner():
                 rows.append(_public(row))
         return {"results": rows}

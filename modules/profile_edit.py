@@ -32,7 +32,7 @@ def _read(username):
     file = _file(username)
     if not file.exists():
         return None
-    row = json.loads(file.read_text())
+    row = json.loads(file.read_text(encoding="utf-8"))
     return row if row.get("owner") == _owner() else None
 
 
@@ -46,7 +46,7 @@ def _save(username, row):
     )
     if os.name != "nt":
         os.fchmod(fd, 0o600)
-    with os.fdopen(fd, "w") as stream:
+    with os.fdopen(fd, "w", encoding="utf-8") as stream:
         json.dump(dict(row, owner=_owner()), stream, ensure_ascii=False)
         stream.flush()
         os.fsync(stream.fileno())

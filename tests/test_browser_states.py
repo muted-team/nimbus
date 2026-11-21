@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -32,7 +33,8 @@ class BrowserStatesTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 store.write("fixture.user", 3, "")
             self.assertEqual(store.read("fixture.user", 3), "synthetic-state")
-            self.assertEqual(store.path("fixture.user", 3).stat().st_mode & 0o777, 0o600)
+            if os.name != "nt":
+                self.assertEqual(store.path("fixture.user", 3).stat().st_mode & 0o777, 0o600)
 
     def test_names_cannot_escape_state_root(self):
         with tempfile.TemporaryDirectory() as temporary:
