@@ -58,7 +58,8 @@ package into a separate directory, and copy the existing user data beside the
 top-level `Nimbus` or `Nimbus.exe` before first launch. The
 [user guide](../ИНСТРУКЦИЯ.md#data) lists the data files and directories to copy.
 Keep the old directory until the new installation has been checked. Bootstrap
-mode deliberately skips legacy sibling-data migration.
+mode deliberately skips legacy sibling-data migration. In a legacy installation,
+the download action only retrieves a package for manual installation.
 
 Offline tests cover pointer validation, symlink refusal, stale/direct runtime
 refusal, process locks, interruption and hard process exits, retries, and byte-exact
