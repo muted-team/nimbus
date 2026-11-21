@@ -42,6 +42,7 @@ import {
   isEnabled,
   loginIndexes,
   publishIndexes,
+  registrationIndexes,
   offIndexes,
   searchProxies,
   sortProxies,
@@ -197,7 +198,7 @@ export default function ProxiesPage() {
       next[index] = writeNoshadow(patchNoshadow(n, { renew: true }))
       const addr = rows.find((r) => r.index === index)?.proxy ?? ""
       try {
-        await saveProxiesLines(next, { login: loginIndexes(rows), publish: publishIndexes(rows), off: offIndexes(rows) })
+        await saveProxiesLines(next, { login: loginIndexes(rows), publish: publishIndexes(rows), registration: registrationIndexes(rows), off: offIndexes(rows) })
         notify.ok(PROXIES_TOAST.renewed(addr))
       } catch (error) {
         notify.error(error, PROXIES_TOAST.notChanged)
@@ -229,6 +230,15 @@ export default function ProxiesPage() {
         notify.error(error, PROXIES_TOAST.notLogin)
       }
     },
+    toggleRegistration: async (index, checked) => {
+      const registration = registrationIndexes(rows)
+      const next = checked ? [...registration, index] : registration.filter((i) => i !== index)
+      try {
+        await saveProxies({ registration: next })
+      } catch (error) {
+        notify.error(error, PROXIES_TOAST.notRegistration)
+      }
+    },
     togglePublish: async (index, checked) => {
       const publish = publishIndexes(rows)
       const next = checked ? [...publish, index] : publish.filter((i) => i !== index)
@@ -255,14 +265,16 @@ export default function ProxiesPage() {
     const next = query.data.proxies.filter((_, i) => !gone.has(i))
     let login = loginIndexes(rows)
     let publish = publishIndexes(rows)
+    let registration = registrationIndexes(rows)
     let off = offIndexes(rows)
     for (const index of [...indexes].sort((a, b) => b - a)) {
       login = indexesAfterRemoval(login, index)
       publish = indexesAfterRemoval(publish, index)
+      registration = indexesAfterRemoval(registration, index)
       off = indexesAfterRemoval(off, index)
     }
     try {
-      const res = await saveProxiesLines(next, { allowEmpty: next.length === 0, login, publish, off })
+      const res = await saveProxiesLines(next, { allowEmpty: next.length === 0, login, publish, registration, off })
       if (res) notify.ok(PROXIES_TOAST.deletedMany(indexes.length))
       clearSelection()
       return true
@@ -281,7 +293,7 @@ export default function ProxiesPage() {
   /* Действия над выбранными — те же, что у строки, только пачкой. Отметки
      считаются по всему списку, как и у одиночных: скрытые срезом строки
      своих отметок не теряют. */
-  const setMarks = async (patch: { off?: number[]; login?: number[]; publish?: number[] }, done?: string) => {
+  const setMarks = async (patch: { off?: number[]; login?: number[]; publish?: number[]; registration?: number[] }, done?: string) => {
     try {
       await saveProxies(patch)
       if (done) notify.ok(done)
@@ -322,6 +334,8 @@ export default function ProxiesPage() {
     { key: "copy", label: PROXY_BULK.copy, icon: CopyIcon, onClick: () => void copyChosen() },
     { key: "login-on", label: PROXY_BULK.loginOn, icon: LogInIcon, onClick: () => void setMarks({ login: union(loginIndexes(rows), chosenIdx) }) },
     { key: "login-off", label: PROXY_BULK.loginOff, icon: LogInIcon, onClick: () => void setMarks({ login: minus(loginIndexes(rows), selected) }) },
+    { key: "registration-on", label: PROXY_BULK.registrationOn, icon: LogInIcon, onClick: () => void setMarks({ registration: union(registrationIndexes(rows), chosenIdx) }) },
+    { key: "registration-off", label: PROXY_BULK.registrationOff, icon: LogInIcon, onClick: () => void setMarks({ registration: minus(registrationIndexes(rows), selected) }) },
     { key: "publish-on", label: PROXY_BULK.publishOn, icon: SendIcon, onClick: () => void setMarks({ publish: union(publishIndexes(rows), chosenIdx) }) },
     { key: "publish-off", label: PROXY_BULK.publishOff, icon: SendIcon, onClick: () => void setMarks({ publish: minus(publishIndexes(rows), selected) }) },
     ...(chosenNoshadow.length
@@ -401,7 +415,7 @@ export default function ProxiesPage() {
         onSort={onSort}
         rotateBusy={rotateBusy}
         actions={rowActions}
-        marked={{ login: loginIndexes(rows).length, publish: publishIndexes(rows).length }}
+        marked={{ login: loginIndexes(rows).length, publish: publishIndexes(rows).length, registration: registrationIndexes(rows).length }}
         selected={selected}
         onPick={onPick}
         onPickAll={(all) => (all ? selectAll() : clearSelection())}
@@ -470,6 +484,7 @@ export default function ProxiesPage() {
                 proxies={query.data.proxies}
                 login={loginIndexes(rows)}
                 publish={publishIndexes(rows)}
+                registration={registrationIndexes(rows)}
                 off={offIndexes(rows)}
                 onClose={() => setAdding(false)}
                 onNoshadow={() => {
@@ -491,7 +506,7 @@ export default function ProxiesPage() {
       {noshadow != null && query.data ? (
         <NoshadowPanel
           proxies={query.data.proxies}
-          marks={{ login: loginIndexes(rows), publish: publishIndexes(rows), off: offIndexes(rows) }}
+          marks={{ login: loginIndexes(rows), publish: publishIndexes(rows), registration: registrationIndexes(rows), off: offIndexes(rows) }}
           editing={noshadow.length ? noshadow : undefined}
           onClose={() => {
             setNoshadow(null)
@@ -506,6 +521,7 @@ export default function ProxiesPage() {
           proxies={query.data.proxies}
           login={loginIndexes(rows)}
           publish={publishIndexes(rows)}
+          registration={registrationIndexes(rows)}
           off={offIndexes(rows)}
           onClose={() => setEditingIndex(null)}
         />

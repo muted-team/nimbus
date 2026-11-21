@@ -45,6 +45,8 @@ export const PROXY_BULK = localize({
   loginOff: "Снять с входа",
   publishOn: "Отметить для публикации",
   publishOff: "Снять с публикации",
+  registrationOn: "Отметить для регистрации",
+  registrationOff: "Снять с регистрации",
   remove: "Удалить",
 } as const)
 
@@ -71,6 +73,7 @@ export const COLUMN_LABEL: Record<SortKey, string> & {
   state: string
   login: string
   publish: string
+  registration: string
   more: string
 } = localize({
   index: "№",
@@ -84,6 +87,7 @@ export const COLUMN_LABEL: Record<SortKey, string> & {
   state: "Состояние",
   login: "Вход",
   publish: "Публикация",
+  registration: "Регистрация",
   more: "Ещё",
 })
 
@@ -109,6 +113,12 @@ export function publishHint(marked: number): string {
   return marked > 0
     ? t("Публикация идёт только через отмеченные ({0}).", [marked])
     : t("Для публикации ничего не выбрано — публикация будет остановлена.")
+}
+
+export function registrationHint(marked: number): string {
+  return marked > 0
+    ? t("Регистрация идёт только через отмеченные ({0}).", [marked])
+    : t("Для регистрации ничего не выбрано — регистрация будет остановлена.")
 }
 
 export const PROXY_ACTION = localize({
@@ -214,6 +224,7 @@ export const PROXIES_TOAST = localize({
   notToggled: "Не удалось изменить строку",
   notLogin: "Не удалось изменить отметку «вход»",
   notPublish: "Не удалось изменить отметку «публикация»",
+  notRegistration: "Не удалось изменить отметку «регистрация»",
   changed: (n: number) => t("Изменено: {0}.", [count(n, ADDR)]),
   notChanged: "Не удалось изменить строки",
   /** правка свела бы две строки в одну — сервер оставил бы одну из них */

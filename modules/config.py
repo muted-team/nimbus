@@ -46,6 +46,8 @@ DEFAULTS = {
     # пул не подставил случайный IP из общего списка
     "proxies_login": [],
     "proxies_publish": [],
+    # Registration is opt-in: existing proxy assignments remain unchanged.
+    "proxies_registration": [],
     # выключенные строки: лежат в proxies, но в работу не идут ни одним делом.
     # Отдельным списком, а не удалением из proxies, чтобы строка не терялась:
     # выключил на время — она осталась на месте со своим вердиктом и страной.

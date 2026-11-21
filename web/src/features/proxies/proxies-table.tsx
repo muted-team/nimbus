@@ -12,7 +12,7 @@ import { cn } from "@/lib/utils"
 import { CELL, COUNTRY_COLUMN, NUM_COLUMNS } from "./columns"
 import type { ProxyRow, SortDir, SortKey } from "./filter"
 import { nowTickMs } from "./health"
-import { COLUMN_LABEL, loginHint, PROXIES_LABEL, publishHint } from "./labels"
+import { COLUMN_LABEL, loginHint, PROXIES_LABEL, publishHint, registrationHint } from "./labels"
 import { ProxyTableRow, type ProxyRowActions } from "./proxy-row"
 
 /* Настоящая `<table>`, не сетка: ширину колонок считает браузер сам — по
@@ -51,7 +51,7 @@ export function ProxiesTable({
   rotateBusy: number | null
   actions: ProxyRowActions
   /** сколько строк отмечено для входа и для публикации — числом в шапке колонки */
-  marked: { login: number; publish: number }
+  marked: { login: number; publish: number; registration: number }
   selected: Set<number>
   onPick: (index: number, mode: PickMode) => void
   /** флажок в шапке: true — выбрать все видимые, false — снять */
@@ -122,6 +122,12 @@ export function ProxiesTable({
               n={marked.publish}
               hint={publishHint(marked.publish)}
               cell={cn(TH, CELL.publish)}
+            />
+            <MarkedTh
+              label={COLUMN_LABEL.registration}
+              n={marked.registration}
+              hint={registrationHint(marked.registration)}
+              cell={cn(TH, CELL.registration)}
             />
             <th className={cn(TH, "z-20 pr-4 md:pr-6", CELL.actions)} />
           </tr>

@@ -65,10 +65,12 @@ def short(url: str) -> str:
 TASK_KEYS = {
     "login": "proxies_login",
     "publish": "proxies_publish",
+    "registration": "proxies_registration",
 }   # дело -> ключ настроек с его набором
 TASK_SELECTION_ERRORS = {
     "login": "для входа не выбрана ни одна прокси — отметьте хотя бы одну в разделе «Прокси»",
     "publish": "для публикации не выбрана ни одна прокси — отметьте хотя бы одну в разделе «Прокси»",
+    "registration": "для регистрации не выбрана ни одна прокси — отметьте хотя бы одну в разделе «Прокси»",
 }
 
 
@@ -274,7 +276,7 @@ def _apply_detected_scheme(url: str, scheme: str) -> str:
         return ""
     patch = {"proxies": [new_url if u == url else u for u in proxies_list]}
     replace_keys = []
-    for key in ("proxies_login", "proxies_publish", "proxies_off"):
+    for key in ("proxies_login", "proxies_publish", "proxies_registration", "proxies_off"):
         items = cfg.get(key) or []
         if url in items:
             patch[key] = [new_url if u == url else u for u in items]
@@ -1131,6 +1133,7 @@ def _ui_context() -> dict:
             # полной строке — она уникальна даже когда адрес у строк общий
             "login": _set("proxies_login"),
             "publish": _set("proxies_publish"),
+            "registration": _set("proxies_registration"),
             "off": _set("proxies_off")}
 
 
@@ -1208,6 +1211,7 @@ def _mark(url: str, entry: dict, ctx: dict, parsed) -> dict:
     return {"proxy": short(url),
             "login": url in ctx.get("login", ()),
             "publish": url in ctx.get("publish", ()),
+            "registration": url in ctx.get("registration", ()),
             "enabled": url not in ctx.get("off", ()),
             "state": "checking" if url in _checking else entry["state"],
             "scheme": _scheme(url, entry, parsed),

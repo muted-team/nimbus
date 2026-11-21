@@ -54,6 +54,7 @@ type Keep<T> = T | "keep"
 interface Marks {
   login: number[]
   publish: number[]
+  registration: number[]
   off: number[]
 }
 

@@ -1282,9 +1282,9 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"error": "proxies должен быть списком строк"}, 400)
                 return
             entries, errors = proxies_mod.parse_list(raw_list)
-        elif not ({"enabled", "login", "publish", "off"} & set(body)):
+        elif not ({"enabled", "login", "publish", "registration", "off"} & set(body)):
             self._json({"error": "нужно поле text (строка), proxies (список) "
-                                 "или отметки login/publish/off"}, 400)
+                                 "или отметки login/publish/registration/off"}, 400)
             return
 
         patch = {}
@@ -1324,6 +1324,7 @@ class Handler(BaseHTTPRequestHandler):
 
         _marked("login", "proxies_login")
         _marked("publish", "proxies_publish")
+        _marked("registration", "proxies_registration")
         _marked("off", "proxies_off")
         if "enabled" in body:
             patch["proxy_enabled"] = proxies_mod.as_bool(body.get("enabled"), False)
@@ -1335,7 +1336,7 @@ class Handler(BaseHTTPRequestHandler):
             replace = ()
             if entries is not None:
                 replace = ("proxy_rotate_urls", SCHEME_NAMED_KEY) + tuple(
-                    k for k in ("proxies_login", "proxies_publish", "proxies_off") if k in patch)
+                    k for k in ("proxies_login", "proxies_publish", "proxies_registration", "proxies_off") if k in patch)
             cfg = config.update(patch, replace=replace)
         except OSError as exc:
             self._json({"error": f"не удалось записать config.json: {exc}"}, 500)

@@ -62,6 +62,7 @@ export interface ProxyRowActions {
   toggleEnabled: (index: number) => void
   toggleLogin: (index: number, checked: boolean) => void
   togglePublish: (index: number, checked: boolean) => void
+  toggleRegistration: (index: number, checked: boolean) => void
 }
 
 /* Общее у DropdownMenuItem и ContextMenuItem: этого пункту списка хватает —
@@ -277,6 +278,17 @@ export function ProxyTableRow({
               disabled={!enabled}
               onCheckedChange={(checked) => actions.togglePublish(row.index, checked)}
               aria-label={t("Публикация: {0}", [row.proxy])}
+            />
+          </div>
+        </td>
+        <td className={cn(TD, CELL.registration)}>
+          <div className="flex justify-center">
+            <Switch
+              size="sm"
+              checked={!!row.registration}
+              disabled={!enabled}
+              onCheckedChange={(checked) => actions.toggleRegistration(row.index, checked)}
+              aria-label={t("Регистрация: {0}", [row.proxy])}
             />
           </div>
         </td>

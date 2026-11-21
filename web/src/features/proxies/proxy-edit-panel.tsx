@@ -52,6 +52,7 @@ export function ProxyEditPanel({
   proxies,
   login,
   publish,
+  registration,
   off,
   onClose,
 }: {
@@ -64,6 +65,7 @@ export function ProxyEditPanel({
   /** правка строки не должна снимать её отметки */
   login: number[]
   publish: number[]
+  registration: number[]
   off: number[]
   onClose: () => void
 }) {
@@ -87,7 +89,7 @@ export function ProxyEditPanel({
     try {
       const next = [...proxies]
       next[index] = value.trim()
-      const res = await saveProxiesLines(next, { login, publish, off })
+      const res = await saveProxiesLines(next, { login, publish, registration, off })
       const error = res?.errors?.[0]?.error
       if (error) {
         notify.warn(sentence(error))

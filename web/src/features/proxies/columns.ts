@@ -29,10 +29,11 @@ export const CELL = {
   state: "text-left whitespace-nowrap",
   ping: "hidden text-right tabular whitespace-nowrap lg:table-cell",
   ms: "hidden text-right tabular whitespace-nowrap 2xl:table-cell",
-  busy: "hidden text-right tabular xl:table-cell",
-  checked: "hidden text-right whitespace-nowrap xl:table-cell",
+  busy: "hidden text-right tabular 2xl:table-cell",
+  checked: "hidden text-right whitespace-nowrap 2xl:table-cell",
   login: "hidden text-center sm:table-cell",
   publish: "hidden text-center sm:table-cell",
+  registration: "hidden text-center sm:table-cell",
   actions: "sticky right-0 bg-background text-right",
 } as const
 

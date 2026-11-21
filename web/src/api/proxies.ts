@@ -34,6 +34,7 @@ export async function saveProxies(patch: {
   enabled?: boolean
   login?: number[]
   publish?: number[]
+  registration?: number[]
   off?: number[]
 }) {
   const res = await api.put<ProxiesResponse>("api/proxies", patch)

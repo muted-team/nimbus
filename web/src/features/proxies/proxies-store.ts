@@ -55,12 +55,13 @@ export async function saveProxiesLines(
     allowEmpty = false,
     login,
     publish,
+    registration,
     off,
-  }: { allowEmpty?: boolean; login?: number[]; publish?: number[]; off?: number[] } = {}
+  }: { allowEmpty?: boolean; login?: number[]; publish?: number[]; registration?: number[]; off?: number[] } = {}
 ): Promise<ProxiesResponse | null> {
   const text = proxiesTextToSave(lines, allowEmpty)
   if (text === null) return null
-  return saveProxies({ text, login, publish, off })
+  return saveProxies({ text, login, publish, registration, off })
 }
 
 /** «Проверить сейчас» и авто-проверка при открытии раздела: список к этому

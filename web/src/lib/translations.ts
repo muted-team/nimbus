@@ -1,5 +1,12 @@
 /** Russian source messages with English and Ukrainian interface translations. */
 export const messages: Record<string, { en: string; uk: string }> = {
+  "Регистрация": {"en": "Registration", "uk": "Реєстрація"},
+  "Регистрация: {0}": {"en": "Registration: {0}", "uk": "Реєстрація: {0}"},
+  "Отметить для регистрации": {"en": "Mark for registration", "uk": "Позначити для реєстрації"},
+  "Снять с регистрации": {"en": "Unmark for registration", "uk": "Зняти позначку реєстрації"},
+  "Регистрация идёт только через отмеченные ({0}).": {"en": "Registration uses only the marked proxies ({0}).", "uk": "Реєстрація використовує лише позначені проксі ({0})."},
+  "Для регистрации ничего не выбрано — регистрация будет остановлена.": {"en": "Select a proxy to enable registration.", "uk": "Виберіть проксі, щоб увімкнути реєстрацію."},
+  "Не удалось изменить отметку «регистрация»": {"en": "Could not change the registration assignment", "uk": "Не вдалося змінити позначку реєстрації"},
   "сервер вернул некорректный ответ": {
     "en": "the server returned an invalid response",
     "uk": "сервер повернув некоректну відповідь"

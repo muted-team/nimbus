@@ -23,6 +23,7 @@ export function ProxyAddPanel({
   proxies,
   login,
   publish,
+  registration,
   off,
   onClose,
   onNoshadow,
@@ -32,6 +33,7 @@ export function ProxyAddPanel({
   /** отметки существующих строк сохраняются вместе с новым списком */
   login: number[]
   publish: number[]
+  registration: number[]
   off: number[]
   onClose: () => void
   /** открыть сборку строк noshadow — вместо ручной вставки */
@@ -52,7 +54,7 @@ export function ProxyAddPanel({
     try {
       const offset = proxies.length
       // Не убираем пустые строки до запроса: номера ошибок относятся к вводу.
-      const res = await saveProxiesLines([...proxies, sent], { login, publish, off })
+      const res = await saveProxiesLines([...proxies, sent], { login, publish, registration, off })
       if (!res) return
       const errs = (res.errors ?? [])
         .filter((e) => e.line > offset)

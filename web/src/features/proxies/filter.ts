@@ -83,6 +83,9 @@ export const loginIndexes = (rows: ProxyRow[]) => rows.filter((r) => r.login).ma
 /** Номера строк, отмеченных для публикации. */
 export const publishIndexes = (rows: ProxyRow[]) => rows.filter((r) => r.publish).map((r) => r.index)
 
+/** Номера строк, явно отмеченных для регистрации. */
+export const registrationIndexes = (rows: ProxyRow[]) => rows.filter((r) => r.registration).map((r) => r.index)
+
 /** Номера выключенных строк по всему списку — тот же приём, что у `login`. */
 export const offIndexes = (rows: ProxyRow[]) => rows.filter((r) => !isEnabled(r)).map((r) => r.index)
 
