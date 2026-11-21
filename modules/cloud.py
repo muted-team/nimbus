@@ -127,9 +127,41 @@ def _generation_current(path: Path, generation: int) -> None:
                                  stop_account=True)
 
 
+def _require_http_session_kind(username, supplied=None):
+    from . import accounts, paths
+
+    entries = []
+    if isinstance(supplied, dict):
+        entries.append(supplied)
+    registry = paths.here(accounts.ACCOUNTS_FILE)
+    if registry.exists():
+        try:
+            data = json.loads(registry.read_text(encoding="utf-8"))
+            entries.extend(
+                row
+                for row in data["accounts"]
+                if isinstance(row, dict) and row.get("username") == username
+            )
+        except (OSError, ValueError, KeyError, TypeError):
+            raise remote.RemoteError(
+                "Не удалось проверить тип сохранённой сессии. Аккаунт остановлен.",
+                stop_account=True,
+            ) from None
+    if any(
+        row.get("http_disabled") is True or row.get("state_kind") == "browser_only_v1"
+        for row in entries
+    ):
+        raise remote.RemoteError(
+            "Для аккаунта сохранена только браузерная сессия. HTTP-вход и HTTP-операции недоступны; используйте поддерживаемые браузерные операции.",
+            stop_account=True,
+        )
+
+
+
 def _state(username: str, generation: int = None) -> str:
     """Строка состояния аккаунта; прежняя сессия переносится на сервер. Нет
     ни того, ни другого — ""."""
+    _require_http_session_kind(username)
     f = state_file(username)
     if generation is None:
         generation = session_manager.state_generation(f)
@@ -180,12 +212,24 @@ def _stale_retry(username: str, send, generation: int = None):
         return send(_state(username, generation))
 
 
+def _account_proxy(username: str, proxy: str) -> str:
+    """Keep a newly registered session on its original route across operations."""
+    from . import accounts
+    for account in accounts._read_raw()['accounts']:
+        if isinstance(account, dict) and account.get('username') == username:
+            retained = account.get('registration_proxy')
+            if isinstance(retained, str) and retained:
+                return retained
+    return session_manager.sticky_proxy(proxy, username)
+
+
 def _call(username: str, path: str, body: dict, timeout=LONG) -> dict:
+    _require_http_session_kind(username)
     protected = remote._protected("POST", path)
     publication = path.rstrip("/").endswith("/publish")
     upload = path.rstrip("/").endswith("/upload")
     if body.get("proxy"):
-        body = {**body, "proxy": session_manager.sticky_proxy(body["proxy"], username)}
+        body = {**body, "proxy": _account_proxy(username, body["proxy"])}
 
     def send(token):
         if not token:
@@ -293,8 +337,15 @@ def _publication_out(username: str, response, generation: int = None) -> dict:
 def login(acc: dict, proxy: str) -> dict:
     """Вход с 2FA. {ok, reason, network, banned, ban_code}. Прежнее состояние
     уходит с запросом: сервер сохранит устройство и ключ Ticket Guard."""
+    from . import execution
+    mode = execution.selected("login")
+    if mode:
+        return execution.run_account("login", mode, acc["username"], _account_proxy(acc["username"], proxy),
+                                     password=acc.get("password") or "",
+                                     totp_secret=acc.get("totp_secret") or "")
     u = acc["username"]
-    proxy = session_manager.sticky_proxy(proxy, u)
+    _require_http_session_kind(u, acc)
+    proxy = _account_proxy(u, proxy)
     body = {k: acc.get(k) or "" for k in
             ("username", "password", "totp_secret", "email", "email_password")}
 
@@ -399,7 +450,10 @@ def upload_photos(username: str, proxy: str, blobs: list, sent: list = None) -> 
     frame — превью для проверки поста (base64). sent — сюда номер фото
     кладётся перед его заливом: при сбое видно, какие могли дойти до TikTok.
     Сбой заливки — tos_upload.TOSUploadError, сервера — remote.RemoteError."""
-    proxy = session_manager.sticky_proxy(proxy, username)
+    from . import execution
+    if execution.selected("publish"):
+        return execution.stage_media(username, blobs, "photo")
+    proxy = _account_proxy(username, proxy)
     up = _call(username, "/v1/photos/upload",
                {"proxy": proxy, "sizes": [len(b) for b in blobs]})
     s = _tos_session(proxy)
@@ -421,30 +475,63 @@ def upload_photo(username: str, proxy: str, data: bytes) -> dict:
     return upload_photos(username, proxy, [data])[0]
 
 
+def _photo_visibility(visibility: str) -> None:
+    if visibility not in ("public", "private"):
+        raise ValueError("visibility: public или private")
+    if visibility == "public":
+        return
+    # Older services ignore unknown JSON fields. Require the exact advertised
+    # request schema BEFORE any upload/publication, never fall back to public.
+    schema = remote.request("GET", "/openapi.json", retry_busy=False)
+    try:
+        request = schema["paths"]["/v1/photos/publish"]["post"]["requestBody"]["content"]["application/json"]["schema"]
+        if request.get("$ref") != "#/components/schemas/PhotoPublishIn":
+            raise ValueError
+        field = schema["components"]["schemas"]["PhotoPublishIn"]["properties"]["visibility"]
+        if field.get("type") != "string" or not {"public", "private"}.issubset(field.get("enum", [])):
+            raise ValueError
+    except (KeyError, TypeError, ValueError, AttributeError):
+        raise remote.RemoteError("Сервер не подтвердил приватную публикацию. Пост не отправлен.") from None
+
+
 def publish_photo_items(username: str, proxy: str, items: list, caption: str = "",
-                        title: str = "", cover_idx: int = 0, music: bool = True) -> dict:
+                        title: str = "", cover_idx: int = 0, music: bool = True,
+                        *, visibility: str = "public") -> dict:
     """Пост из фото, залитых upload_photos, по порядку. Ответ как у
     publish.publish_photo: {ok, verdict, code, message, item_id, network}."""
+    from . import execution
+    if execution.selected("publish") or any("browser_mode" in item for item in items):
+        return execution.publish_staged(username, proxy, items, caption)
+    _photo_visibility(visibility)
     # у фото одного вызова upload_photos билет общий: сервер берёт из него
     # все фото сразу, поэтому каждый билет — один раз
     tickets = list(dict.fromkeys(it["ticket"] for it in items))
     return _call(username, "/v1/photos/publish", {
         "proxy": proxy, "tickets": tickets,
         "frames": [it["frame"] for it in items], "caption": caption, "title": title,
-        "cover_idx": cover_idx, "music": music})
+        "cover_idx": cover_idx, "music": music,
+        **({"visibility": "private"} if visibility == "private" else {})})
 
 
 def publish_photos(username: str, proxy: str, blobs: list, caption: str = "",
-                   title: str = "", cover_idx: int = 0, music: bool = True) -> dict:
+                   title: str = "", cover_idx: int = 0, music: bool = True,
+                   *, visibility: str = "public") -> dict:
     """Фото-пост из байтов целиком: залить все и опубликовать."""
+    _photo_visibility(visibility)
     items = upload_photos(username, proxy, blobs)
-    return publish_photo_items(username, proxy, items, caption, title, cover_idx, music)
+    return publish_photo_items(username, proxy, items, caption, title, cover_idx, music, visibility=visibility)
 
 
 def upload_video(username: str, proxy: str, path) -> dict:
     """Видео — в TikTok частями с диска (целиком в память не читается).
     {ticket, crcs, meta} — для publish_video_item. Склейку делает сервер."""
-    proxy = session_manager.sticky_proxy(proxy, username)
+    from . import execution
+    if execution.selected("publish"):
+        media_path = Path(path)
+        if media_path.stat().st_size > 100 * 1024 * 1024:
+            raise ValueError("Видео превышает лимит браузерной публикации 100 МиБ")
+        return execution.stage_media(username, [media_path.read_bytes()], "video")[0]
+    proxy = _account_proxy(username, proxy)
     path = Path(path)
     size = path.stat().st_size
     up = _call(username, "/v1/videos/upload", {"proxy": proxy, "size": size})
@@ -467,6 +554,9 @@ def upload_video(username: str, proxy: str, path) -> dict:
 
 def publish_video_item(username: str, proxy: str, item: dict, caption: str = "") -> dict:
     """Пост из видео, залитого upload_video: склейка и публикация на сервере."""
+    from . import execution
+    if execution.selected("publish") or "browser_mode" in item:
+        return execution.publish_staged(username, proxy, [item], caption)
     return _call(username, "/v1/videos/publish", {
         "proxy": proxy, "ticket": item["ticket"], "crcs": item["crcs"],
         "caption": caption, **item["meta"]})
@@ -547,6 +637,11 @@ def notices(username: str, proxy: str) -> dict:
 def logout(username: str, proxy: str) -> dict:
     """Выход на стороне TikTok. Подтверждён — строка состояния больше не
     нужна и удаляется. {ok, confirmed, error}."""
+    from . import execution
+    mode = execution.selected("logout")
+    if mode:
+        return {**execution.run_account("logout", mode, username, _account_proxy(username, proxy)),
+                "browser_mode": mode}
     out = _call(username, "/v1/logout", {"proxy": proxy})
     if (type(out.get("ok")) is not bool or type(out.get("confirmed")) is not bool
             or out["confirmed"] and not out["ok"]):

@@ -100,7 +100,8 @@ def attempt_via_server(acc, proxy, account_name) -> bool:
         _set_reason("не удалось сохранить параметры прокси аккаунта — проверьте его локальные данные")
         return False
     try:
-        if not acc.get('password'):
+        from . import execution
+        if not acc.get('password') and not execution.selected("login"):
             checked = cloud.session_check(acc['username'], via)
             if checked.get("stop_account") or checked.get("verdict") == "unknown":
                 _set_reason(checked.get("error") or "Проверка сессии не подтверждена")

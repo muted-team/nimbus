@@ -309,6 +309,8 @@ export type ProxyOnDeath = "swap" | "stop"
 export type BrowserProfile = "chrome152" | "firefox155"
 
 export interface Settings {
+  execution_modes?: import("./execution").ExecutionModes
+  browser_visibility?: "public" | "private"
   browser_profile: BrowserProfile
   browser_profile_active: BrowserProfile
   browser_profiles: BrowserProfile[]
@@ -333,7 +335,7 @@ export interface Settings {
 export type ServerCheck = { ok: true; ms: number } | { ok: false; error: string }
 
 export type SettingsPatch = Partial<
-  Pick<Settings, "threads" | "proxy_on_death" | "server_wait_min" | "port" | "host" | "browser_profile">
+  Pick<Settings, "threads" | "proxy_on_death" | "server_wait_min" | "port" | "host" | "browser_profile" | "execution_modes" | "browser_visibility">
 > & {
   phone_access?: boolean
   password?: string

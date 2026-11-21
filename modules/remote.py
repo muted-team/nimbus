@@ -35,12 +35,15 @@ class RemoteError(RuntimeError):
     0 — ответа не было."""
 
     def __init__(self, text: str, status: int = 0, network: bool = False, *,
-                 stop_account: bool = False, outcome_unknown: bool = False):
+                 stop_account: bool = False, outcome_unknown: bool = False,
+                 code: str = "", state_preserved: bool = False):
         super().__init__(text)
         self.status = status
         self.network = network
         self.stop_account = stop_account
         self.outcome_unknown = outcome_unknown
+        self.code = code
+        self.state_preserved = state_preserved
 
 
 def base() -> str:
@@ -233,10 +236,17 @@ def key() -> str:
     return (config.get("license_key") or "").strip()
 
 
+def _registration(path: str) -> bool:
+    """Registration is a versioned job API, independent of login profile routing."""
+    return path.rstrip('/') == '/v1/register' or path.startswith('/v1/register/')
+
+
 def _protected(method: str, path: str) -> bool:
-    """Вход, загрузка, публикация, изменение профиля, удаление и выход — без повтора."""
-    return method.upper() == "POST" and (path.rstrip("/") in ("/v1/login", "/v2/login", "/v2/legacy/login")
-                                        or path.rstrip("/").endswith(("/publish", "/upload", "/profile/update", "/posts/delete", "/logout")))
+    """Вход, загрузка, публикация, изменение профиля, удаление и выход отправляются без повтора."""
+    return method.upper() == "POST" and (path.rstrip("/") in ("/v1/login", "/v2/login", "/v3/browser/login", "/v2/legacy/login")
+                                        or _registration(path)
+                                        or (path.startswith("/v3/browser/jobs/") and path.rstrip("/").endswith("/cancel"))
+                                        or path.rstrip("/").endswith(("/publish", "/upload", "/posts/delete", "/logout", "/profile/update")))
 
 
 def request(method: str, path: str, params: dict = None, json: dict = None,
@@ -249,7 +259,7 @@ def request(method: str, path: str, params: dict = None, json: dict = None,
     protected = _protected(method, path)
     retry_busy = retry_busy and not protected
     browser_profile = client_device.browser_profile()
-    profile_action = not (method.upper() == "GET" and path.rstrip("/") in
+    profile_action = not path.startswith("/v3/browser/") and not _registration(path) and not (method.upper() == "GET" and path.rstrip("/") in
                           ("/v1/health", ACCOUNT_PATH, HISTORY_PATH))
     token = api_key if api_key is not None else key()
     if not token:
@@ -291,6 +301,15 @@ def request(method: str, path: str, params: dict = None, json: dict = None,
             raise RemoteError(f"сервер не отвечает ({type(exc).__name__})",
                               network=not protected, stop_account=protected,
                               outcome_unknown=protected) from exc
+        if r.status_code == 503:
+            try:
+                unavailable = r.json()
+            except (ValueError, TypeError, AttributeError):
+                unavailable = None
+            if (isinstance(unavailable, dict) and unavailable.get('code') == 'state_executor_unavailable'
+                    and unavailable.get('state_preserved') is True and unavailable.get('retriable') is False):
+                raise RemoteError('Состояние требует новой версии сервера. Вход сохранён; повторный вход не нужен.',
+                                  503, stop_account=True, code='state_executor_unavailable', state_preserved=True)
         if r.status_code != 503 or not retry_busy or time.monotonic() >= deadline:
             break
         try:
@@ -308,7 +327,11 @@ def request(method: str, path: str, params: dict = None, json: dict = None,
         raise RemoteError(f"сервер ответил HTTP {r.status_code} не JSON",
                           r.status_code, r.status_code >= 500 and not protected,
                           stop_account=protected, outcome_unknown=protected) from exc
-    if r.status_code != 200:
+    accepted_registration = method.upper() == 'POST' and path.rstrip('/') == '/v1/register' and r.status_code == 202
+    accepted_browser_job = (method.upper() == 'POST' and path.rstrip('/') in
+                            ('/v3/browser/login', '/v3/browser/publish', '/v3/browser/logout')
+                            and r.status_code == 202)
+    if r.status_code != 200 and not accepted_registration and not accepted_browser_job:
         detail = out.get("detail") if isinstance(out, dict) else None
         raise RemoteError(detail if isinstance(detail, str)
                           else f"сервер ответил HTTP {r.status_code}",

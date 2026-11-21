@@ -19,6 +19,7 @@ import { LanguagePanel } from "./language-panel"
 import { PasswordPanel } from "./password-panel"
 import { PhonePanel } from "./phone-panel"
 import { ServerPanel } from "./server-panel"
+import { ExecutionPanel } from "./execution-panel"
 import { ThemePanel } from "./theme-panel"
 import { SettingRow, SettingsGroup } from "./settings-row"
 
@@ -105,6 +106,7 @@ function SettingsForm({ settings }: { settings: Settings }) {
     <>
       <ThemePanel />
       <LanguagePanel />
+      <ExecutionPanel settings={settings} />
       <SettingsGroup title={SETTINGS_LABEL.browserGroup}>
         <SettingRow label={SETTINGS_LABEL.browser}>
           <SimpleSelect

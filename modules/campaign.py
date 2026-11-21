@@ -772,6 +772,11 @@ def _worker_run(acc, slots, caption, title, min_delay_ms, max_delay_ms,
                       "на старом" % (username, rot.get("reason") or "?"))
 
         _worker_set(username, "login")
+        from . import execution
+        browser_mode = execution.selected("publish")
+        if browser_mode and resolve_delete_count(delete_before, posts_per_account):
+            _fail_account(username, "Браузерный исполнитель не поддерживает удаление прошлых постов", processed_counter)
+            return
 
         def check_step(p):
             from . import cloud
@@ -781,7 +786,14 @@ def _worker_run(acc, slots, caption, title, min_delay_ms, max_delay_ms,
 
         # сбой сети на проверке ничего не говорит о сессии: входить заново из-за
         # него нельзя — пересаживаемся на другой прокси и проверяем ещё раз
-        alive, network = _net_retry(check_step, held, username)
+        if browser_mode:
+            present = execution.store().read(username, browser_mode) is not None
+            if not present and execution.selected("login") != browser_mode:
+                _fail_account(username, "Выполните вход в выбранном браузерном режиме", processed_counter)
+                return
+            alive, network = {"alive": present, "browser_saved": present}, False
+        else:
+            alive, network = _net_retry(check_step, held, username)
         if alive.get("stop_account") or alive.get("verdict") == "unknown":
             reason = alive.get("error") or "Проверка сессии не подтверждена"
             _pause_account(username)
@@ -794,7 +806,10 @@ def _worker_run(acc, slots, caption, title, min_delay_ms, max_delay_ms,
             _fail_account(username, reason, processed_counter)
             return
         if alive.get("alive"):
-            print("[campaign] %s: сессия жива, вход не нужен" % username)
+            if browser_mode:
+                print("[campaign] %s: браузерное состояние сохранено; вход проверит публикация" % username)
+            else:
+                print("[campaign] %s: сессия жива, вход не нужен" % username)
         else:
             _worker_set(username, "login")
 
@@ -817,7 +832,7 @@ def _worker_run(acc, slots, caption, title, min_delay_ms, max_delay_ms,
 
         # что с аккаунтом было ДО нас: снятые за нарушение правил посты
         # (одно чтение уведомлений, аккаунт не меняется)
-        notices = _read_notices(username, held)
+        notices = {} if browser_mode else _read_notices(username, held)
         removed = notices.get("removed") or 0
         if notices.get("error"):
             print("[campaign] %s: уведомления не прочитались: %s"
@@ -914,7 +929,7 @@ def _worker_run(acc, slots, caption, title, min_delay_ms, max_delay_ms,
         # поэтому вход не выполнялся и приостановку (1091) кампания ещё не видела.
         # Спрашиваем TikTok входом: ответил баном — аккаунт уходит из списка, как
         # забаненный; нет — остаётся «не пролитым» и попробуется в следующий раз.
-        if _account_trouble(final) and not _stop_requested():
+        if not browser_mode and _account_trouble(final) and not _stop_requested():
             _worker_set(username, "login")
 
             print("[campaign] %s: ни одного поста — проверяю аккаунт входом" % username)

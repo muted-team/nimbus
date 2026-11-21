@@ -19,6 +19,7 @@ LEGACY_COOKIES_FILE = _ROOT / "tiktok_cookies.jar"
 SESSION_SUFFIX = ".json"
 LEGACY_SESSION_SUFFIX = ".jar"
 STATE_SUFFIX = ".state"
+BROWSER_STATE_SUFFIX = ".browser.state"
 DEVICE_STATE_SUFFIX = ".device.state"
 DEVICE_SUFFIX = ".device.json"
 COOKIE_SCHEMA = "tiktok-web-api.cookies"
@@ -358,7 +359,7 @@ def _account_files(username: str) -> list:
         with client_device.use_browser_profile(profile):
             directory = session_directory()
         files.extend(directory / f"{stem}{suffix}" for suffix in (
-            SESSION_SUFFIX, LEGACY_SESSION_SUFFIX, STATE_SUFFIX,
+            SESSION_SUFFIX, LEGACY_SESSION_SUFFIX, STATE_SUFFIX, BROWSER_STATE_SUFFIX,
             DEVICE_SUFFIX, DEVICE_STATE_SUFFIX))
     return files
 

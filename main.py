@@ -481,6 +481,13 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"counters": _studio_counters()})
         elif path == "/api/anon":
             self._json({"via_server": True})  # анонимную личность держит сервер
+        elif path == "/api/execution/capabilities":
+            from modules import execution
+            self._json(execution.capabilities())
+        elif path == "/api/execution/states":
+            from modules import accounts, execution
+            names = [row.get("username") for row in accounts._read_raw()["accounts"] if isinstance(row, dict)]
+            self._json({name: execution.account_status(name) for name in names if isinstance(name, str)})
         elif path == "/api/settings":
             self._api_settings_get()
         elif path == "/api/server/check":
@@ -737,6 +744,8 @@ class Handler(BaseHTTPRequestHandler):
                               "supported": False, "links": phone_links(int(port))})
         return {"server": {"url": remote.base(), "default": remote.API_BASE,
                            "custom": bool(cfg.get("server_url"))},
+                "execution_modes": cfg.get("execution_modes", {"login": 0, "publish": 0, "logout": 0}),
+                "browser_visibility": cfg.get("browser_visibility", "public"),
                 "browser_profile": cfg.get("browser_profile", "firefox155"),
                 "browser_profile_active": client_device.browser_profile(),
                 "browser_profiles": list(client_device.BROWSER_PROFILES),
@@ -813,6 +822,30 @@ class Handler(BaseHTTPRequestHandler):
                 return
             print(f"[settings] сервер: {url}")
         patch = {}
+        if "execution_modes" in body:
+            from modules import execution
+            modes = body["execution_modes"]
+            if (not isinstance(modes, dict) or set(modes) != set(execution.OPERATIONS)
+                    or any(type(mode) is not int or mode not in (0, 3, 4) for mode in modes.values())):
+                self._json({"error": "неверные режимы исполнения"}, 400)
+                return
+            caps = execution.capabilities() if any(modes.values()) else None
+            for operation, mode in modes.items():
+                if mode and not any(row["mode"] == mode and row["available"] for row in caps["operations"][operation]):
+                    self._json({"error": "выбранный режим операции недоступен"}, 400)
+                    return
+            if self._campaign_running():
+                self._json({"error": "остановите публикацию перед сменой исполнителя"}, 409)
+                return
+            patch["execution_modes"] = modes
+        if "browser_visibility" in body:
+            if body["browser_visibility"] not in ("public", "private"):
+                self._json({"error": "неверная видимость публикации"}, 400)
+                return
+            if self._campaign_running():
+                self._json({"error": "остановите публикацию перед сменой видимости"}, 409)
+                return
+            patch["browser_visibility"] = body["browser_visibility"]
         if "browser_profile" in body:
             patch["browser_profile"] = body["browser_profile"]
         if "phone_access" in body:
@@ -1930,15 +1963,15 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"error": "нельзя разлогинивать аккаунт, пока идёт "
                                  "публикация — сначала остановите её"}, 409)
             return
-        from modules import accounts, cloud, proxy_pool, remote
+        from modules import accounts, cloud, execution, proxy_pool, remote
         try:
             held = proxy_pool.lease(task="login")
             try:
                 out = cloud.logout(username, held.url)
             finally:
                 held.release()
-            result = {**out, "may_clear_local": out.get("confirmed")}
-        except (proxy_pool.NoAliveProxy, remote.RemoteError) as exc:
+            result = {**out, "may_clear_local": out.get("confirmed") and not out.get("browser_mode")}
+        except (proxy_pool.NoAliveProxy, remote.RemoteError, execution.ExecutorUnavailable) as exc:
             result = {"ok": False, "confirmed": False, "may_clear_local": False,
                       "error": str(exc)}
         had_session = False
