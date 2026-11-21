@@ -657,3 +657,27 @@ def profiles(usernames: list, proxy: str, method: str = None, posts: bool = True
     return remote.request("POST", "/v1/profiles", timeout=LONG, json={
         "usernames": list(usernames), "proxy": proxy, "method": method,
         "posts": posts, "threads": threads})
+
+
+def _profile_data(response):
+    data = response.get("data") if isinstance(response, dict) else None
+    if not isinstance(data, dict):
+        raise remote.RemoteError("Сервер не подтвердил результат профиля", stop_account=True)
+    if data.get("state_saved") is False:
+        data = dict(data, stop_account=True)
+    return data
+
+
+def profile_info(username: str, proxy: str) -> dict:
+    return _profile_data(_call(username, "/v1/profile/info", {"proxy": proxy}))
+
+
+def profile_plan(username: str, proxy: str, changes: dict) -> dict:
+    return _profile_data(_call(username, "/v1/profile/plan", {"proxy": proxy, "changes": changes}))
+
+
+def profile_update(username: str, proxy: str, changes: dict, expected_user_id: str,
+                   acknowledge_cooldown: bool = False) -> dict:
+    return _profile_data(_call(username, "/v1/profile/update", {
+        "proxy": proxy, "changes": changes, "expected_user_id": expected_user_id,
+        "acknowledge_cooldown": acknowledge_cooldown}))

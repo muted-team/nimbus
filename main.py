@@ -253,6 +253,34 @@ class Handler(BaseHTTPRequestHandler):
         self._body_done = False
         super().handle_one_request()
 
+    def _api_profile_edit(self, action):
+        from modules import profile_edit, remote, proxy_pool
+        body, error = self._read_json()
+        if error or not isinstance(body, dict):
+            self._json({"error": error or "Неверные параметры профиля"}, 400)
+            return
+        if self._campaign_running():
+            self._json({"error": "Дождитесь завершения публикации"}, 409)
+            return
+        try:
+            username = body.get("username")
+            if action == "info":
+                result = profile_edit.info(username)
+            elif action == "plan":
+                result = profile_edit.plan(username, body.get("changes"))
+            else:
+                result = profile_edit.update(username, body.get("changes"), body.get("expected_user_id"), body.get("acknowledge_cooldown", False))
+        except ValueError as exc:
+            self._json({"error": str(exc)}, 400)
+        except proxy_pool.NoAliveProxy:
+            self._json({"error": "Нет рабочего прокси для профиля"}, 409)
+        except remote.RemoteError as exc:
+            self._json({"error": str(exc)}, exc.status if exc.status in (400, 404, 422) else 502)
+        except OSError:
+            self._json({"error": "Не удалось сохранить результат. Перечитайте профиль перед повтором"}, 500)
+        else:
+            self._json(result)
+
     def _json(self, obj, status: int = 200, headers=()):
         # тело запроса дочитываем ДО ответа, даже если обработчику оно не нужно:
         # иначе его остаток уедет в следующий запрос по тому же соединению
@@ -1388,6 +1416,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/auth":
             self._api_auth_login()
+        elif path in ("/api/tiktok-profile/info", "/api/tiktok-profile/plan", "/api/tiktok-profile/update"):
+            self._api_profile_edit(path.rsplit("/", 1)[1])
         elif path == "/api/auth/logout":
             self._api_auth_logout()
         elif path == "/api/slots":

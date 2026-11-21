@@ -109,14 +109,14 @@ def assert_idle(root):
     if edits.is_symlink():
         raise UpdateBusy('Не удалось проверить незавершённые изменения профиля')
     if edits.exists():
-        # The updater can encounter journals from other Nimbus builds. It can
-        # trust an explicit reconciliation without loading their feature code.
+        from .profile_edit import _requires_readback
+
         for file in edits.glob('*.json'):
             try:
                 if file.is_symlink():
                     raise ValueError('linked profile record')
                 row = json.loads(file.read_text(encoding='utf-8'))
-                if row.get('reconciled') is not True:
+                if row.get('reconciled') is not True and _requires_readback(row):
                     raise UpdateBusy('Сначала перечитайте профиль с неподтверждённым изменением')
             except (OSError, ValueError, AttributeError, TypeError) as error:
                 raise UpdateBusy('Не удалось безопасно проверить журнал изменений профиля') from error

@@ -65,6 +65,8 @@ import {
 import { AccountsTable } from "./accounts-table"
 import { COLUMNS, gridTemplate, useTier, visibleColumns } from "./columns"
 import { AddPanel } from "./add-panel"
+import { ProfileEditPanel } from "./profile-edit-panel"
+import type { Account } from "@/api/types"
 import { BannedBlock } from "./banned-block"
 import {
   startRun,
@@ -177,6 +179,7 @@ export default function AccountsPage() {
 
   const run = useAccountsRun((s) => s.run)
   const [adding, setAdding] = useState(false)
+  const [profileEditing, setProfileEditing] = useState<Account | null>(null)
   const [editing, setEditing] = useState<string | null>(null)
 
   const accounts = useMemo(
@@ -837,7 +840,8 @@ export default function AccountsPage() {
       <PageBody bleed>
         {list}
         {adding ? <AddPanel onClose={() => setAdding(false)} /> : null}
-        {editingAccount ? <EditPanel account={editingAccount} onClose={() => setEditing(null)} /> : null}
+        {editingAccount ? <EditPanel account={editingAccount} onClose={() => setEditing(null)} onProfile={() => { setProfileEditing(editingAccount); setEditing(null) }} /> : null}
+        {profileEditing ? <ProfileEditPanel key={profileEditing.username} account={profileEditing} onClose={() => setProfileEditing(null)} /> : null}
       </PageBody>
       <AccountSheet
         account={cardAccount}
@@ -846,6 +850,7 @@ export default function AccountsPage() {
         busy={!!card && busyNames.has(card)}
         locked={campOn}
         actions={rowActions}
+        onProfile={() => { if (cardAccount) { setProfileEditing(cardAccount); setCard(null) } }}
         onClose={() => setCard(null)}
       />
       <AccountsBar ctx={selectionCtx} actions={selectionActions} onClear={clearSelection} />

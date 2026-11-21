@@ -1,4 +1,4 @@
-import { useLanguage } from "@/lib/i18n"
+import { t, useLanguage } from "@/lib/i18n"
 import { useState } from "react"
 
 import { updateAccount, useAccountSecrets } from "@/api/accounts"
@@ -53,7 +53,7 @@ function draftFrom(username: string, secrets: AccountSecrets): Draft {
   }
 }
 
-export function EditPanel({ account, onClose }: { account: Account; onClose: () => void }) {
+export function EditPanel({ account, onClose, onProfile }: { account: Account; onClose: () => void; onProfile?: () => void }) {
   useLanguage()
   const secretsQuery = useAccountSecrets(account.username)
   const [draft, setDraft] = useState<Draft | null>(null)
@@ -198,7 +198,8 @@ export function EditPanel({ account, onClose }: { account: Account; onClose: () 
             />
           </Field>
         </div>
-        <SheetFooter className="flex-row justify-end gap-2 border-t">
+        <SheetFooter className="flex-row flex-wrap justify-end gap-2 border-t">
+          {account.has_session && onProfile ? <Button variant="outline" onClick={onProfile} disabled={saving}>{t("Профиль TikTok")}</Button> : null}
           <Button variant="outline" onClick={onClose} disabled={saving}>
             {EDIT_LABEL.cancel}
           </Button>

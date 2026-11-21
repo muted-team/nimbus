@@ -80,6 +80,11 @@ class ActivityTests(unittest.TestCase):
                 activity.assert_idle(root)
             receipt.write_text(json.dumps({'reconciled': True}))
             activity.assert_idle(root)
+            receipt.write_text(json.dumps({'reconciled': False, 'result': {'verdict': 'rejected'}}))
+            activity.assert_idle(root)
+            receipt.write_text(json.dumps({'reconciled': 'true', 'result': {'verdict': 'unknown'}}))
+            with self.assertRaises(activity.UpdateBusy):
+                activity.assert_idle(root)
 
     def test_maintenance_parks_after_work_and_resumes_without_losing_work(self):
         work_started, complete_work, finished, stop = [threading.Event() for _ in range(4)]

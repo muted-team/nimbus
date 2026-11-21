@@ -55,6 +55,7 @@ export function AccountSheet({
   busy,
   locked,
   actions,
+  onProfile,
   onClose,
 }: {
   account: Account | null
@@ -63,6 +64,7 @@ export function AccountSheet({
   busy: boolean
   locked: boolean
   actions: AccountRowActions
+  onProfile?: (username: string) => void
   onClose: () => void
 }) {
   const panel = useRef<HTMLDivElement>(null)
@@ -80,7 +82,7 @@ export function AccountSheet({
         finalFocus={false}
       >
         {account ? (
-          <SheetBody account={account} avatar={avatar} counters={counters} busy={busy} locked={locked} actions={actions} />
+          <SheetBody account={account} avatar={avatar} counters={counters} busy={busy} locked={locked} actions={actions} onProfile={onProfile} />
         ) : null}
       </SheetContent>
     </Sheet>
@@ -94,6 +96,7 @@ function SheetBody({
   busy,
   locked,
   actions,
+  onProfile,
 }: {
   account: Account
   avatar?: string
@@ -101,6 +104,7 @@ function SheetBody({
   busy: boolean
   locked: boolean
   actions: AccountRowActions
+  onProfile?: (username: string) => void
 }) {
   useLanguage()
   const u = account.username
@@ -175,6 +179,7 @@ function SheetBody({
               {a.label(ctx)}
             </Button>
           ))}
+          {account.has_session && onProfile ? <Button variant="outline" size="sm" disabled={locked || busy} onClick={() => onProfile(u)}>{t("Профиль TikTok")}</Button> : null}
           <DropdownMenu>
             <DropdownMenuTrigger render={<Button variant="ghost" size="icon-sm" aria-label={ACCOUNT_ACTION.more} />}>
               <EllipsisIcon />
