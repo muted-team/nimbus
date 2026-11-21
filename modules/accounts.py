@@ -109,7 +109,6 @@ def list_accounts() -> list:
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _B32_RE = re.compile(r"^([A-Z2-7]+|[a-z2-7]+)$")   # base32 в одном регистре
-_PLAIN_ID_RE = re.compile(r"^[a-z0-9._]{2,24}$")    # логин: строчные/цифры, без спецсимволов
 # Длины 2FA-секрета: base32 от ключа стандартного размера — 80, 128, 160 и
 # 256 бит. Промежуточных не бывает, и это единственный надёжный признак:
 # по набору символов секрет от логина той же формы не отличить.
@@ -142,152 +141,51 @@ def _looks_totp(tok: str) -> bool:
 
 
 def _looks_login(tok: str) -> bool:
-    """Токен, годный на роль логина: буквы любого алфавита, цифры, ._- (можно
-    с ведущим '@').
-
-    Шире `_PLAIN_ID_RE`: настоящий логин бывает с заглавными и точкой
-    (`Kate_2024`, `Anna.K`), а прежний разбор по виду такие не признавал; вне
-    ASCII (`Катя`) тоже признаётся логином. Здесь это только признак
-    «первая часть строки похожа на логин» — сам логин берётся по позиции, а не
-    по виду."""
-    return bool(_LOGIN_RE.match(tok))
+    """Логин из букв, цифр, '_' или '.', с необязательным ведущим '@'."""
+    return bool(_LOGIN_RE.fullmatch(tok))
 
 
 def _parse_account_line(line: str):
-    """Достаёт аккаунт из строки. Разделители любые (| : ; , пробел, таб —
-    вперемешку).
-
-    Первые две части строки — логин и пароль, по ПОЗИЦИИ, без угадывания:
-    `Kate_2024:kate2024:2FA` и `coiijf2i3:coiijf2i3:2FA` разбираются по
-    порядку, даже когда пароль выглядит проще логина.
-
-    Разбор по ВИДУ — запасной путь: он в ходу, когда первая часть вовсе не
-    похожа на логин (строка начинается с почты или с 2FA-секрета), то есть
-    при произвольном порядке полей:
-      - email          — есть '@' и точка после ('user@mail.ru');
-      - 2fa            — base32 в одном регистре и РОВНО стандартная длина
-                         ключа: 16, 26, 32 или 52 символа (_looks_totp);
-      - логин          — токен только из строчных/цифр/._ (можно с ведущим
-                         '@'); при нескольких — первый. Такого нет — первый,
-                         который TikTok вообще примет за юзернейм (буквы,
-                         цифры, '_' и '.'): логин вне ASCII (`Катя`) с паролем
-                         в запасном пути не различить по виду — разобрано
-                         осознанно, по позиции такие строки читает
-                         правило выше. Годного на юзернейм токена нет вовсе —
-                         строка не разбирается;
-      - регион         — двухбуквенный код вроде `US` отбрасывается, но не
-                         сохраняется: строке продавца доверять нельзя, настоящий
-                         регион берётся только из подписанных TikTok cookies;
-      - пароли         — оставшиеся токены. Если есть почта и паролей два —
-                         пароль почты это тот, что стоит СРАЗУ ПОСЛЕ адреса
-                         почты (обычная форма комбо
-                         'user:pass:email:emailpass'), второй — пароль аккаунта.
-    Итог dict: {username, password, totp_secret?, email?, email_password?}.
-    Короткий формат — логин и пароль. В расширенном формате распознаётся
-    источник кода: 2FA-секрет либо почта с паролем почты. Иначе None.
-    """
-    raw = [t for t in re.split(r"[\s|:;,]+", line.strip()) if t]
-    if len(raw) == 2:
-        # No source of a code is required until TikTok asks for one. In this
-        # short format the second token is always a password, never a TOTP key.
-        if _looks_login(raw[0]):
-            return {"username": raw[0].lstrip("@"), "password": raw[1]}
-        return None
-    if len(raw) < 3:
+    """Разбирает известные форматы импорта. Поля паролей определяет порядок."""
+    raw = re.split(r"\s*[|:;,]\s*|\s+", line.strip())
+    if not 2 <= len(raw) <= 5 or not all(raw):
         return None
 
-    # (индекс, токен) — индекс нужен, чтобы понять, какой пароль относится к почте
-    tokens = list(enumerate(raw))
-    email = email_idx = None
-    for idx, t in tokens:
-        if _EMAIL_RE.match(t):
-            email, email_idx = t, idx
-            break
+    username, password, *extra = raw
+    email_login = bool(_EMAIL_RE.fullmatch(username))
+    if _looks_login(username) or email_login:
+        entry = {"username": username.lstrip("@"), "password": password}
+        if not extra:
+            return entry
+        if len(extra) == 1 and _looks_totp(extra[0]):
+            entry["totp_secret"] = extra[0].upper()
+            if email_login:
+                entry["email"] = username
+            return entry
+        if len(extra) in (2, 3) and _EMAIL_RE.fullmatch(extra[0]):
+            entry.update(email=extra[0], email_password=extra[1])
+            if len(extra) == 3:
+                if not _looks_totp(extra[2]):
+                    return None
+                entry["totp_secret"] = extra[2].upper()
+            return entry
+        if (len(extra) == 2 and re.fullmatch(r"[A-Z]{2}", extra[0])
+                and _looks_totp(extra[1])):
+            return {**entry, "totp_secret": extra[1].upper()}
 
-    # Секрет выбираем среди ВСЕХ подходящих, а не берём первый попавшийся:
-    # 16 символов — длина спорная, столько же бывает и у логина. Кандидат на
-    # 26/32/52 символа не может быть ни логином (у юзернейма максимум 24), ни
-    # паролем (у пароля максимум 20) — такой и берём. Спорный берём только
-    # если другого нет, и не с первого места: там по правилу владельца логин.
-    cands = [idx for idx, t in tokens if idx != email_idx and _looks_totp(t)]
-    totp_idx = min(cands, key=lambda i: (len(raw[i]) <= 24, i == 0, i), default=None)
-    totp = raw[totp_idx].upper() if totp_idx is not None else None
-
-    taken = {i for i in (email_idx, totp_idx) if i is not None}  # логином их уже не возьмём
-    rest = [it for it in tokens if it[0] not in taken]  # (индекс, токен) — всё, что не почта/2fa
-
-    first_idx, first_tok = tokens[0]
-    # правило владельца: первая часть строки — логин, вторая — пароль, по
-    # позиции, а не по виду
-    positional_login = first_idx not in taken and _looks_login(first_tok)
-
-    if not rest:
-        return None
-
-    if positional_login:
-        # правило владельца: первая часть строки — логин, вторая — пароль,
-        # по позиции, а не по виду
-        login_idx = first_idx
-    else:
-        # запасной путь (строка начинается с почты/2fa): порядок произвольный —
-        # логин первый токен-идентификатор, иначе первый, который TikTok вообще
-        # примет за юзернейм. Годного нет — строку не разбираем: раньше тут
-        # брался «первый оставшийся, каким бы он ни был», и в логин уезжал
-        # пароль со спецсимволами (`gjfnix054$`).
-        login_idx = next((it[0] for it in rest
-                          if _PLAIN_ID_RE.match(it[1].lstrip("@"))),
-                         next((it[0] for it in rest if _looks_login(it[1])), None))
-        if login_idx is None:
-            return None
-    username = raw[login_idx].lstrip("@")
-    pwd_items = [it for it in rest if it[0] != login_idx]
-    if not username or not pwd_items:
-        return None
-
-    # Регион из комбо не сохраняем принципиально: он может быть выдуманным.
-    # Убираем похожий на ISO-код токен только когда рядом есть другой кандидат
-    # на пароль — единственное значение `US` оставляем, чтобы разбор не решал
-    # за человека, что это точно не пароль.
-    if len(pwd_items) > 1:
-        without_region = [it for it in pwd_items
-                          if not re.fullmatch(r"[A-Z]{2}", it[1])]
-        if without_region:
-            pwd_items = without_region
-
-    email_password = None
-    if email is not None and not totp and len(pwd_items) >= 2:
-        # пароль почты — ближайший пароль ПОСЛЕ адреса почты (обычная форма);
-        # нет такого — берём последний из паролей
-        after = [it for it in pwd_items if it[0] > email_idx]
-        ep_item = min(after, key=lambda it: it[0]) if after else pwd_items[-1]
-        email_password = ep_item[1]
-        pwd_items = [it for it in pwd_items if it[0] != ep_item[0]]
-
-    if totp and len(pwd_items) > 1:
-        # При TOTP почта не является источником кода и её пароль угадывать не
-        # надо. Пароль аккаунта — ближайшее поле после логина (обычный порядок
-        # email|login|password|region|2fa); если его нет, ближайшее перед ним.
-        after_login = [it for it in pwd_items if it[0] > login_idx]
-        password_item = (min(after_login, key=lambda it: it[0]) if after_login
-                         else max(pwd_items, key=lambda it: it[0]))
-        password = password_item[1]
-    else:
-        password = " ".join(t for _, t in pwd_items) if pwd_items else None
-    if not password:
-        return None
-
-    # источник кода обязателен: 2FA-секрет ИЛИ почта с паролем почты
-    if not totp and not (email and email_password):
-        return None
-
-    entry = {"username": username, "password": password}
-    if totp:
-        entry["totp_secret"] = totp
-    if email:
-        entry["email"] = email
-    if email_password:
-        entry["email_password"] = email_password
-    return entry
+    # Старые форматы с почтой или 2FA в начале и однозначно перевёрнутые строки.
+    if (len(raw) == 5 and email_login and _looks_login(raw[1])
+            and re.fullmatch(r"[A-Z]{2}", raw[3]) and _looks_totp(raw[4])):
+        return {"username": raw[1].lstrip("@"), "password": raw[2],
+                "email": username, "totp_secret": raw[4].upper()}
+    if len(raw) == 3 and _looks_login(password):
+        if _looks_totp(username):
+            return {"username": password.lstrip("@"), "password": raw[2],
+                    "totp_secret": username.upper()}
+        if not email_login and not _looks_login(username) and _looks_totp(raw[2]):
+            return {"username": password.lstrip("@"), "password": username,
+                    "totp_secret": raw[2].upper()}
+    return None
 
 
 def add_accounts_bulk(text: str) -> dict:

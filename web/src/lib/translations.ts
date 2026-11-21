@@ -2364,9 +2364,9 @@ export const messages: Record<string, { en: string; uk: string }> = {
     "en": "Log out on this device",
     "uk": "Вийти на цьому пристрої"
   },
-  "логин:пароль — по строке на аккаунт. 2FA-секрет или почту можно добавить. Или вставьте JSON с куки TikTok": {
-    "en": "username:password — one account per line. Add a 2FA secret or email if needed. Or paste TikTok cookie JSON",
-    "uk": "логін:пароль — один акаунт на рядок. Можна додати 2FA-секрет або пошту. Або вставте JSON із куки TikTok"
+  "логин или email:пароль TikTok — по строке на аккаунт. 2FA-секрет или почту можно добавить. Или вставьте JSON с куки TikTok": {
+    "en": "username or email:TikTok password — one account per line. Add a 2FA secret or email if needed. Or paste TikTok cookie JSON",
+    "uk": "логін або email:пароль TikTok — один акаунт на рядок. Можна додати 2FA-секрет або пошту. Або вставте JSON із куки TikTok"
   },
   "2FA-секрет и почта необязательны. Для аккаунта, добавленного по куки, пароль можно не указывать.": {
     "en": "A 2FA secret and email are optional. Accounts added with cookies do not require a password.",

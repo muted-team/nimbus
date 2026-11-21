@@ -2,8 +2,7 @@
 
 Первые две части строки — логин и пароль ПО ПОЗИЦИИ: настоящий логин
 бывает с заглавными и точкой (`Kate_2024`, `Anna.K`), и прежний разбор «по виду»
-брал логином пароль. Разбор по виду остаётся запасным путём — когда первая часть
-вовсе не похожа на логин (строка начинается с почты или с 2FA-секрета).
+брал логином пароль. Старые форматы с другим порядком проверяются отдельно.
 
 Тест постоянный, без сети и без файлов: только разбор.
 
@@ -29,6 +28,32 @@ TOTP26 = "ABCDEFGHIJKLMNOPQRSTUVWX23"        # 26 символов = 128 бит
 
 # (что проверяем, строка, ожидаемая запись целиком; None — строка не разбирается)
 CASES = [
+    ("email как логин, пароль TikTok и 2FA",
+     f"fixture@example.invalid:Pass123!):{TOTP32}",
+     {"username": "fixture@example.invalid", "password": "Pass123!)",
+      "totp_secret": TOTP32, "email": "fixture@example.invalid"}),
+    ("email как логин и пароль TikTok",
+     "fixture@example.invalid:Pass123!)",
+     {"username": "fixture@example.invalid", "password": "Pass123!)"}),
+    ("username, пароль TikTok, почта, пароль почты и 2FA",
+     f"fixture.user:Pass123!):mailbox@example.invalid:MailPass99:{TOTP32}",
+     {"username": "fixture.user", "password": "Pass123!)",
+      "email": "mailbox@example.invalid", "email_password": "MailPass99",
+      "totp_secret": TOTP32}),
+    ("пароль TikTok похож на более длинный 2FA-секрет",
+     f"fixture.user:{TOTP32}:{TOTP.lower()}",
+     {"username": "fixture.user", "password": TOTP32, "totp_secret": TOTP}),
+    ("пароль TikTok сам похож на адрес почты",
+     f"fixture.user:p@ss.example:{TOTP}",
+     {"username": "fixture.user", "password": "p@ss.example", "totp_secret": TOTP}),
+    ("короткие пароли сохраняются в почтовом комбо",
+     "fixture.user : US : mailbox@example.invalid : GB",
+     {"username": "fixture.user", "password": "US",
+      "email": "mailbox@example.invalid", "email_password": "GB"}),
+    ("в почтовом комбо пароль почты похож на 2FA-секрет",
+     f"fixture.user:pass:mailbox@example.invalid:{TOTP}",
+     {"username": "fixture.user", "password": "pass",
+      "email": "mailbox@example.invalid", "email_password": TOTP}),
     # --- правило владельца: первая часть — логин, вторая — пароль ---
     ("логин с заглавными, пароль строчный",
      f"Kate_2024:kate2024:{TOTP}",
@@ -107,6 +132,12 @@ CASES = [
     # --- не разбирается ---
     ("логин и пароль без источника кода", "user:pass", {"username": "user", "password": "pass"}),
     ("нет источника кода", "user:pass:notacode", None),
+    ("неизвестное поле перед секретом", f"fixture.user:pass:extra:{TOTP}", None),
+    ("лишнее поле после секрета", f"fixture.user:pass:{TOTP}:extra", None),
+    ("ошибочный секрет в почтовом комбо", "fixture.user:pass:mailbox@example.invalid:mailpass:oops", None),
+    ("неизвестный порядок почтового комбо", "fixture.user:pass:mailpass:mailbox@example.invalid", None),
+    ("пустой пароль TikTok не сдвигает поля", f"fixture.user::{TOTP}", None),
+    ("пустой почтовый пароль не сдвигает поля", f"fixture.user:pass:mailbox@example.invalid::{TOTP}", None),
     ("пустая строка", "   ", None),
 ]
 

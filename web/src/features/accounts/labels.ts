@@ -92,7 +92,7 @@ export const RUN_VERB = localize({
 export const ADD_LABEL = localize({
   title: "Добавить аккаунты",
   placeholder:
-    "логин:пароль — по строке на аккаунт. 2FA-секрет или почту можно добавить. Или вставьте JSON с куки TikTok",
+    "логин или email:пароль TikTok — по строке на аккаунт. 2FA-секрет или почту можно добавить. Или вставьте JSON с куки TikTok",
   adding: "Добавляем…",
   close: "Закрыть",
 } as const)
