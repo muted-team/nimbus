@@ -69,6 +69,7 @@ class ClientHTTPAcceptance(unittest.TestCase):
         stack = self.stack = contextlib.ExitStack()
         self.addCleanup(stack.close)
         self.root = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="client-http-", dir=RUNTIME)))
+        stack.callback(self.close_fixture_log)
         stack.enter_context(paths.use_root(self.root))
         self.upstream = ThreadingHTTPServer(("127.0.0.1", 0), Upstream)
         self.upstream.daemon_threads = True
@@ -90,6 +91,14 @@ class ClientHTTPAcceptance(unittest.TestCase):
         self.start_server(self.local)
         self.http = http.client.HTTPConnection("127.0.0.1", self.local.server_port, timeout=4)
         stack.callback(self.http.close)
+
+    def close_fixture_log(self):
+        from modules import eventlog
+        with eventlog._file_lock:
+            if eventlog._file_handler_path == self.root / 'logs/events.log':
+                if eventlog._file_handler is not None:
+                    eventlog._file_handler.close()
+                eventlog._file_handler = eventlog._file_handler_path = None
 
     def start_server(self, server):
         thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -128,6 +137,15 @@ class ClientHTTPAcceptance(unittest.TestCase):
 
     def requests_at(self, path):
         return [r for r in self.upstream.seen if r["path"] == path]
+
+    def test_fixture_cleanup_closes_http_event_log(self):
+        from modules import eventlog
+        eventlog.say('Synthetic HTTP fixture log')
+        handler = eventlog._file_handler
+        self.assertIsNotNone(handler.stream)
+        self.stack.close()
+        self.assertIsNone(handler.stream)
+        self.assertFalse(self.root.exists())
 
     def test_protected_operations_are_one_shot_over_http(self):
         protected = ("/v1/login", "/v1/photos/upload", "/v1/photos/publish", "/v1/videos/upload",
