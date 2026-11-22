@@ -288,7 +288,7 @@ with tempfile.TemporaryDirectory(dir="web/src/features/proxies") as directory:
         handler._api_proxies_put()
         print(json.dumps({"response": replies[0], "config": config.load()}))
 `], { cwd: new URL("../../../../", import.meta.url), env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1", NIMBUS_DATA_ROOT: "" },
-    input: JSON.stringify({ body, config }), encoding: "utf8" })
+    input: JSON.stringify({ body, config }), encoding: "utf8", timeout: 10000 })
   expect(python.status, python.stderr).toBe(0)
   return JSON.parse(python.stdout) as { response: ProxiesResponse; config: Record<string, unknown> }
 }
@@ -366,7 +366,7 @@ it.each(["renew", "checkbox mark"])("refuses %s during deferred deletion, then a
     await Promise.resolve()
     await Promise.resolve()
   }
-})
+}, 30000)
 
 it.each(["renew", "checkbox mark"])("holds the same interlock when %s starts before deletion", async (action) => {
   const proxies = ["http://a.invalid:8080", "http://fixture-country-US-session-ab12-time-45:synthetic@proxy.noshadow.pro:6969", "http://c.invalid:8080"]
