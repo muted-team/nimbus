@@ -223,6 +223,11 @@ def _account_proxy(username: str, proxy: str) -> str:
     return session_manager.sticky_proxy(proxy, username)
 
 
+def _session_uid_valid(uid) -> bool:
+    from . import profiles
+    return type(uid) in (str, int) and bool(profiles._UID_RE.fullmatch(str(uid)))
+
+
 def _call(username: str, path: str, body: dict, timeout=LONG) -> dict:
     _require_http_session_kind(username)
     from . import profiles
@@ -264,6 +269,23 @@ def _call(username: str, path: str, body: dict, timeout=LONG) -> dict:
         if not isinstance(out, dict):
             raise remote.RemoteError("сервер вернул ответ неверного формата",
                                      stop_account=protected, outcome_unknown=protected)
+        checked = out.get("data")
+        if (path.rstrip("/").endswith("/session/check") and isinstance(checked, dict)
+                and checked.get("alive") is True and not _session_uid_valid(checked.get("uid"))):
+            return {"data": {"alive": False, "network": False, "verdict": "unknown", "stop_account": True,
+                             "error": "Проверка сессии не подтверждена. Обработка аккаунта остановлена."}}
+        observed = checked.get("before") if isinstance(checked, dict) else None
+        if (path.rstrip("/").endswith("/profile/info") and isinstance(checked, dict)
+                and checked.get("verdict") == "observed"
+                and isinstance(observed, dict) and isinstance(observed.get("user_id"), str)
+                and profiles._UID_RE.fullmatch(observed["user_id"])):
+            try:
+                profiles.require_uid(username, observed["user_id"])
+            except profiles.ProfileUIDConflict:
+                profiles.mark_identity_conflict(username)
+                raise remote.RemoteError(profiles.IDENTITY_CONFLICT, status=400, stop_account=True) from None
+            except (OSError, profiles.sqlite3.Error):
+                raise remote.RemoteError("Не удалось проверить UID сохранённого профиля.", stop_account=True) from None
         try:
             saved = _save(username, out.pop("state", None), generation)
         except OSError:
@@ -271,10 +293,8 @@ def _call(username: str, path: str, body: dict, timeout=LONG) -> dict:
                                      stop_account=True, outcome_unknown=protected) from None
         if not saved:
             raise remote.RemoteError("Состояние аккаунта изменено. Ответ не сохранён.", stop_account=True)
-        checked = out.get("data")
         if (path.rstrip("/").endswith("/session/check") and isinstance(checked, dict)
-                and checked.get("alive") is True and type(checked.get("uid")) in (str, int)
-                and profiles._UID_RE.fullmatch(str(checked["uid"]))
+                and checked.get("alive") is True and _session_uid_valid(checked.get("uid"))
                 and checked.get("http_status") in (None, 200) and checked.get("message") in (None, "success")
                 and checked.get("code") in (None, 0) and checked.get("verdict") != "unknown"
                 and checked.get("stop_account") is not True and out.get("state_saved") is not False):
@@ -657,7 +677,7 @@ def session_check(username: str, proxy: str) -> dict:
         status = data.get("http_status")
         if data["alive"]:
             uid = data.get("uid")
-            valid = (type(uid) in (str, int) and bool(uid) and str(uid) != "0"
+            valid = (_session_uid_valid(uid)
                      and status in (None, 200) and data.get("message") in (None, "success")
                      and data.get("code") in (None, 0))
         else:

@@ -219,6 +219,12 @@ def identity_conflict(username: str) -> bool:
     return bool(row and row[0] == "identity_conflict")
 
 
+def forget_identity_conflict(username: str) -> None:
+    """Explicit account/cache deletion is the only reset of process quarantine."""
+    _identity_conflicts.discard((paths.here(db.DB_FILE), username))
+    _touch(username)
+
+
 def require_uid(username: str, uid: str) -> None:
     if (paths.here(db.DB_FILE), username) in _identity_conflicts:
         raise ProfileUIDConflict(IDENTITY_CONFLICT)

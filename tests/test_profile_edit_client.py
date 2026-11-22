@@ -78,6 +78,24 @@ class ProfileClientTests(unittest.TestCase):
         self.assertTrue(result.get("stop_account"))
         self.assertIs(result.get("state_saved"), False)
 
+    def test_readback_quarantines_foreign_uid_before_releasing_the_request_lock(self):
+        profiles.save_identity("synthetic.profile", {"user_id": "111", "unique_id": "synthetic.profile"})
+        self.request.return_value = {"state": "SYNTHETIC_FOREIGN", "data": {"verdict": "observed", "before": {
+            "user_id": "222", "unique_id": "foreign.profile", "nickname": "Foreign"}}}
+
+        @contextlib.contextmanager
+        def checked_lock(username):
+            try:
+                yield
+            finally:
+                self.assertTrue(profiles.identity_conflict(username), "Quarantine must precede the next account operation")
+
+        with patch.object(cloud, "_lock", side_effect=checked_lock), self.assertRaises(remote.RemoteError) as caught:
+            cloud.profile_info("synthetic.profile", "http://fixture.invalid")
+        self.assertTrue(caught.exception.stop_account)
+        self.assertEqual(client_session.state_file("synthetic.profile").read_text(), "KEPT")
+        self.request.assert_called_once()
+
 
 class ProfileBridgeTests(unittest.TestCase):
     def setUp(self):

@@ -11,6 +11,7 @@ import contextlib
 import http.client
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import io
+import itertools
 import json
 import os
 from pathlib import Path
@@ -19,6 +20,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from unittest.mock import patch
 from urllib.parse import urlencode, urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -226,6 +228,124 @@ class ClientHTTPAcceptance(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(info["last_result"]["verdict"], "unknown")
         self.assertTrue(profile_edit._read(USER)["reconciled"])
+
+    def test_camoufox_profile_uid_conflict_blocks_http_purge_and_upload(self):
+        from modules import db, purge
+
+        self.stack.enter_context(patch.object(client_device, "_DEFAULT_PROFILE", "camoufox158"))
+        accounts._write_json(self.root / "accounts.json", {"accounts": [{
+            "username": USER, "password": "Synthetic-password", "registration_proxy": self.base}]})
+        profiles.save_identity(USER, {"user_id": "111", "unique_id": USER, "nickname": "Kept"})
+        profiles.save_posts(USER, [{"id": "5001", "desc": "Kept post"}])
+        client_session.state_file(USER).write_text("SYNTHETIC_KEPT")
+
+        def respond(method, path, body):
+            if path.endswith("/profile/info"):
+                return 200, {"state": "SYNTHETIC_FOREIGN", "data": {"verdict": "observed", "before": {
+                    "user_id": "222", "unique_id": "foreign.qa", "nickname": "Foreign"}, "policies": {}}}, {}
+            return 200, {"data": {}, "deleted": 0, "failed": [], "total": 0}, {}
+
+        self.upstream.respond = respond
+        finished = threading.Event()
+        run_purge = purge.run_manual
+
+        def tracked_purge(*args):
+            try:
+                with paths.use_root(self.root), client_device.use_browser_profile("camoufox158"):
+                    run_purge(*args)
+            finally:
+                finished.set()
+
+        with patch.object(purge, "run_manual", side_effect=tracked_purge):
+            status, info = self.api("POST", "/api/tiktok-profile/info", {"username": USER})
+            self.assertEqual(status, 400, info)
+            status, purge_out = self.api("POST", "/api/accounts/purge", {"username": USER, "count": -1})
+            self.assertEqual(status, 202, purge_out)
+            self.assertTrue(finished.wait(4), "Queued synthetic purge never finished")
+        with self.assertRaises(remote.RemoteError):
+            cloud.upload_photos(USER, "", [b"SYNTHETIC_UPLOAD"])
+        mutations = [request for request in self.upstream.seen
+                     if request["path"].endswith(("/posts/delete", "/photos/upload", "/photos/publish"))]
+        self.assertEqual(mutations, [], "Foreign profile state must never reach a mutation")
+        self.assertEqual(len(self.requests_at("/v2/profile/info")), 1)
+        self.assertTrue(profiles.identity_conflict(USER))
+        self.assertEqual(client_session.state_file(USER).read_text(), "SYNTHETIC_KEPT")
+        with contextlib.closing(db.connect()) as conn:
+            self.assertEqual(conn.execute("SELECT user_id, unique_id, nickname FROM profiles WHERE username = ?", (USER,)).fetchone(),
+                             ("111", USER, "Kept"))
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM posts WHERE username = ?", (USER,)).fetchone()[0], 1)
+
+    def test_camoufox_malformed_session_uids_are_terminal(self):
+        with client_device.use_browser_profile("camoufox158"):
+            profiles.save_identity(USER, {"user_id": "111", "unique_id": USER})
+            state = client_session.state_file(USER)
+            for uid in ("01", "00", "-1", "not-a-uid", "1" * 65, True):
+                with self.subTest(uid=uid):
+                    state.write_text("SYNTHETIC_KEPT")
+                    self.upstream.respond = lambda *args: (200, {"state": "SYNTHETIC_UNCONFIRMED", "data": {
+                        "alive": True, "uid": uid, "http_status": 200, "message": "success", "code": 0}}, {})
+                    result = cloud.session_check(USER, "")
+                    self.assertIs(result["alive"], False)
+                    self.assertTrue(result["stop_account"])
+                    self.assertEqual(result["verdict"], "unknown")
+                    self.assertEqual(state.read_text(), "SYNTHETIC_KEPT")
+                    self.assertFalse(profiles.identity_conflict(USER), "Malformed evidence is not a confirmed UID mismatch")
+
+    def test_camoufox_campaign_stops_after_malformed_uid_without_upstream_mutation(self):
+        from modules import campaign, signin
+
+        with client_device.use_browser_profile("camoufox158"):
+            accounts.add_account({"username": USER, "password": "Synthetic-password"})
+            profiles.save_identity(USER, {"user_id": "111", "unique_id": USER})
+            client_session.state_file(USER).write_text("SYNTHETIC_KEPT")
+            self.upstream.respond = lambda *args: (200, {"data": {
+                "alive": True, "uid": "not-a-uid", "http_status": 200, "message": "success", "code": 0}}, {})
+            with patch.object(campaign, "_stop_requested", return_value=False), \
+                    patch.object(campaign, "_worker_set"), patch.object(campaign, "_worker_clear"), \
+                    patch.object(campaign, "_pause_account") as paused, patch.object(campaign, "_fail_account") as failed, \
+                    patch.object(campaign, "_read_notices") as notices, patch.object(signin, "run") as login, \
+                    patch.object(campaign.batch_publish, "BatchWorker") as publication:
+                campaign._worker_run(accounts.load_account(USER), [], "", "", 0, 0, 1, None, itertools.count())
+            paused.assert_called_once_with(USER)
+            failed.assert_called_once()
+            login.assert_not_called()
+            notices.assert_not_called()
+            publication.assert_not_called()
+        self.assertEqual([r["path"] for r in self.upstream.seen if r["method"] == "POST"], ["/v2/session/check"])
+
+    def test_http_delete_readd_clears_only_the_deleted_accounts_quarantine(self):
+        self.stack.enter_context(patch.object(client_device, "_DEFAULT_PROFILE", "camoufox158"))
+        alias = "fixture@example.invalid"
+        account = {"username": alias, "password": "Synthetic-password"}
+        self.assertEqual(self.api("POST", "/api/accounts", account)[0], 200)
+        profiles.save_identity(alias, {"user_id": "111", "unique_id": "kept.qa"})
+        profiles.save_identity("unrelated.qa", {"user_id": "333", "unique_id": "unrelated.qa"})
+        profiles.mark_identity_conflict("unrelated.qa")
+        phase = {"uid": "222", "handle": "foreign.qa"}
+        self.upstream.respond = lambda *args: (200, {"ok": True, "verdict": "ok", "state": "SYNTHETIC_FRESH",
+            "profile": {"user_id": phase["uid"], "unique_id": phase["handle"]}}, {})
+        status, result = self.api("POST", "/api/login", {"username": alias})
+        self.assertEqual(status, 200)
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["identity_conflict"])
+        self.assertTrue(profiles.identity_conflict(alias))
+        phase.update(uid="111", handle="kept.qa")
+        self.assertTrue(self.api("POST", "/api/login", {"username": alias})[1]["identity_conflict"],
+                        "Ordinary relogin must not remove quarantine")
+        status, removed = self.api("POST", "/api/accounts/delete", {"username": alias, "new_device": True})
+        self.assertEqual(status, 200, removed)
+        self.assertTrue(removed["ok"])
+        self.assertFalse(profiles.identity_conflict(alias), "Explicit successful deletion must clear process quarantine")
+        self.assertIsNone(profiles.get(alias))
+        self.assertTrue(profiles.identity_conflict("unrelated.qa"))
+        self.assertEqual(self.api("POST", "/api/accounts", account)[0], 200)
+        status, result = self.api("POST", "/api/login", {"username": alias})
+        self.assertEqual(status, 200, result)
+        self.assertTrue(result["ok"])
+        self.assertFalse(result.get("identity_conflict", False))
+        self.assertFalse(result.get("stop_account", False))
+        self.assertEqual(profiles.get(alias)["user_id"], "111")
+        self.assertEqual(len(self.requests_at("/v2/login")), 3)
 
     def test_media_unicode_photo_video_duplicate_delete_and_keepalive(self):
         status, folder = self.api("POST", "/api/media", {"name": "QA 50% literal%20 # 🌷"})

@@ -49,6 +49,23 @@ class LoginProfileTests(unittest.TestCase):
         self.assertEqual(request.call_args.kwargs["json"]["username"], self.alias)
         self.assertEqual(accounts.list_accounts()[0]["profile"]["unique_id"], "real.profile")
 
+    def test_failed_cache_deletion_keeps_uid_quarantine(self):
+        profiles.save_identity(self.alias, self.identity)
+        profiles.mark_identity_conflict(self.alias)
+        with patch.object(db, "connect", side_effect=profiles.sqlite3.OperationalError("fixture deletion failure")):
+            self.assertIs(avatars.remove(self.alias), False)
+        self.assertTrue(profiles.identity_conflict(self.alias))
+        self.assertTrue(profiles.get(self.alias)["identity_conflict"])
+
+    def test_failed_session_deletion_keeps_registered_account_quarantined(self):
+        profiles.save_identity(self.alias, self.identity)
+        profiles.mark_identity_conflict(self.alias)
+        with patch.object(client_session, "clear_session", side_effect=OSError("fixture deletion failure")):
+            with self.assertRaises(OSError):
+                accounts.remove_account(self.alias, new_device=True)
+        self.assertTrue(accounts._exists(self.alias))
+        self.assertTrue(profiles.identity_conflict(self.alias))
+
     def test_malformed_identity_is_not_merged_into_existing_cache(self):
         profiles.save_identity(self.alias, self.identity)
         before = profiles.get(self.alias)

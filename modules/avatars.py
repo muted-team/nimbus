@@ -124,7 +124,7 @@ def data_of(usernames: list) -> dict:
     return out
 
 
-def remove(username: str) -> None:
+def remove(username: str) -> bool:
     """Удаляет аватарку, профиль и посты аккаунта (вместе с аккаунтом)."""
     try:
         with closing(db.connect()) as conn:
@@ -133,7 +133,8 @@ def remove(username: str) -> None:
             conn.execute("DELETE FROM posts WHERE username = ?", (username,))
             conn.commit()
     except sqlite3.Error:
-        pass
+        return False
+    return True
 
 
 def rename(old: str, new: str) -> None:

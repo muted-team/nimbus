@@ -524,8 +524,9 @@ def remove_account(username: str, new_device: bool = False) -> bool:
         except OSError:
             _restore_json(account_path, original_accounts)
             raise
-    from . import avatars, eventlog
-    avatars.remove(username)  # и аватарку, и профиль с постами
+    from . import avatars, eventlog, profiles
+    if avatars.remove(username):  # и аватарку, и профиль с постами
+        profiles.forget_identity_conflict(username)
     eventlog.say("аккаунт удалён из списка, компьютер %s"
                  % ("стёрт" if new_device else "сохранён"), "warn", username, "accounts")
     return True
