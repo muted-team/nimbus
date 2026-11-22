@@ -180,6 +180,21 @@ class PhoneAccessTests(unittest.TestCase):
             self.assertTrue(handler._auth_required())
             self.assertFalse(handler._auth_ok())
 
+    def test_password_removal_midcheck_never_grants_a_forwarded_request(self):
+        from modules import auth
+        handler = object.__new__(application_handler())
+        handler.server = SimpleNamespace(require_auth=True)
+        handler.client_address = ('127.0.0.1', 50000)
+        handler.headers = {'X-Forwarded-Proto': 'https'}
+        calls = []
+        def enabled():
+            calls.append(len(calls))
+            return not calls or len(calls) == 1
+        with patch.object(auth, 'enabled', side_effect=enabled):
+            self.assertFalse(handler._auth_ok())
+        # A single read keeps the requirement stable for the whole decision.
+        self.assertEqual(len(calls), 1)
+
     def test_cannot_remove_password_with_a_saved_network_bind(self):
         from tests.test_settings_browser import BrowserSettingsTest
         fixture = BrowserSettingsTest()

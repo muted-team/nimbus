@@ -366,10 +366,13 @@ class Handler(BaseHTTPRequestHandler):
 
     def _auth_ok(self) -> bool:
         from modules import auth
+        # One decision, one read: removing the password between two lookups
+        # must never turn required auth into a free pass mid-request.
+        enabled = auth.enabled()
         if (hasattr(self.server, "phone_parent")
-                or self._forwarded() or self._client_ip() not in ("127.0.0.1", "::1")) and not auth.enabled():
+                or self._forwarded() or self._client_ip() not in ("127.0.0.1", "::1")) and not enabled:
             return False
-        return not auth.enabled() or auth.cookie_ok(self.headers.get("Cookie"))
+        return not enabled or auth.cookie_ok(self.headers.get("Cookie"))
 
     def _auth_required(self) -> bool:
         """Спрашивает ли сервер пароль с этого адреса. С самого компьютера —
