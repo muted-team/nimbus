@@ -4,14 +4,12 @@ import { ArrowDownIcon, ArrowUpIcon } from "lucide-react"
 import { Hint } from "@/components/hint"
 import { SelectionBarSpacer, type BarAction } from "@/components/selection-bar"
 import { Checkbox } from "@/components/ui/checkbox"
-import { useNow } from "@/hooks/use-now"
 import { fmtInt } from "@/lib/format"
 import type { PickMode } from "@/lib/selection"
 import { cn } from "@/lib/utils"
 
 import { CELL, COUNTRY_COLUMN, NUM_COLUMNS } from "./columns"
 import type { ProxyRow, SortDir, SortKey } from "./filter"
-import { nowTickMs } from "./health"
 import { COLUMN_LABEL, loginHint, PROXIES_LABEL, publishHint, registrationHint } from "./labels"
 import { ProxyTableRow, type ProxyRowActions } from "./proxy-row"
 
@@ -29,7 +27,6 @@ const TH = "sticky top-0 z-10 border-b bg-background px-3 py-2 text-xs font-norm
 
 export function ProxiesTable({
   rows,
-  fetchedAt,
   sort,
   dir,
   onSort,
@@ -42,13 +39,11 @@ export function ProxiesTable({
   bulk,
 }: {
   rows: ProxyRow[]
-  /** когда пришёл этот снимок, мс эпохи (dataUpdatedAt у запроса) */
-  fetchedAt: number
   sort: SortKey
   dir: SortDir
   onSort: (key: SortKey) => void
-  /** номер строки, у которой сейчас идёт смена IP */
-  rotateBusy: number | null
+  /** строки, у которых сейчас идёт смена IP */
+  rotateBusy: ReadonlySet<number>
   actions: ProxyRowActions
   /** сколько строк отмечено для входа и для публикации — числом в шапке колонки */
   marked: { login: number; publish: number; registration: number }
@@ -60,9 +55,6 @@ export function ProxiesTable({
   bulk: BarAction[]
 }) {
   useLanguage()
-  // «N мин назад» и отсчёт смены IP растут своим ходом
-  const now = useNow(nowTickMs(rows))
-  const elapsed = fetchedAt ? Math.max(0, Math.floor((now - fetchedAt) / 1000)) : 0
   const picked = rows.reduce((n, r) => n + (selected.has(r.index) ? 1 : 0), 0)
   const all = picked > 0 && picked === rows.length
 
@@ -137,8 +129,7 @@ export function ProxiesTable({
             <ProxyTableRow
               key={row.index}
               row={row}
-              elapsed={elapsed}
-              rotateBusy={rotateBusy === row.index}
+              rotateBusy={rotateBusy.has(row.index)}
               actions={actions}
               selected={selected.has(row.index)}
               onPick={onPick}

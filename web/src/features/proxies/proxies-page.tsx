@@ -1,15 +1,9 @@
 import { useLanguage } from "@/lib/i18n"
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import {
-  CopyIcon,
-  GlobeIcon,
-  LogInIcon,
   PlusIcon,
-  PowerIcon,
-  PowerOffIcon,
   RefreshCwIcon,
   SearchXIcon,
-  SendIcon,
   ServerOffIcon,
   Trash2Icon,
 } from "lucide-react"
@@ -20,7 +14,7 @@ import { confirmDestructive } from "@/components/confirm"
 import { Hint } from "@/components/hint"
 import { Page, PageBody, PageHeader } from "@/components/page"
 import { SearchInput } from "@/components/search-input"
-import { SelectionBar, type BarAction } from "@/components/selection-bar"
+import { SelectionBar } from "@/components/selection-bar"
 import { toneText, type Tone } from "@/components/status"
 import { ErrorView, LoadingRows, StateView } from "@/components/state-view"
 import { Button } from "@/components/ui/button"
@@ -29,7 +23,8 @@ import { Spinner } from "@/components/ui/spinner"
 import { Switch } from "@/components/ui/switch"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useHotkey } from "@/hooks/use-hotkey"
-import { fmtInt } from "@/lib/format"
+import { useNow } from "@/hooks/use-now"
+import { fmtInt, sentence } from "@/lib/format"
 import { copyWithToast } from "@/lib/native"
 import { notify } from "@/lib/notify"
 import { emptySelection, pick, prune, type PickMode, type SelectionState } from "@/lib/selection"
@@ -48,16 +43,16 @@ import {
   sortProxies,
   toProxyRows,
   type ProxiesFilter,
+  type ProxyRow,
   type SortDir,
   type SortKey,
 } from "./filter"
-import { autoCheckAllowed } from "./health"
+import { autoCheckAllowed, canRotate, nowTickMs } from "./health"
+import { proxyActions, type ProxyActionKey } from "./actions"
 import {
   EMPTY_LABEL,
   FILTER_LABEL,
-  NOSHADOW_LABEL,
   PROXIES_LABEL,
-  PROXY_BULK,
   PROXIES_TOAST,
   PROXY_CONFIRM,
   rotateOutcome,
@@ -74,6 +69,7 @@ import { NoshadowPanel } from "./noshadow-panel"
 import { ProxyAddPanel } from "./proxy-add-panel"
 import { ProxyCapacity } from "./proxy-capacity"
 import { ProxyEditPanel } from "./proxy-edit-panel"
+import { parseProxyLine } from "./proxy-line"
 import type { ProxyRowActions } from "./proxy-row"
 
 /* Экран прокси: таблица во всю ширину со срезами-вкладками, поиском и
@@ -96,13 +92,16 @@ export default function ProxiesPage() {
   const [editingIndex, setEditingIndex] = useState<number | null>(null)
   /* панель noshadow: null — закрыта, [] — собрать новые, номера — правка выбранных */
   const [noshadow, setNoshadow] = useState<number[] | null>(null)
-  const [rotateBusy, setRotateBusy] = useState<number | null>(null)
+  const [rotateBusy, setRotateBusy] = useState<Set<number>>(() => new Set())
+  const operations = useRef({ removing: false, rotating: new Set<number>() })
   const [selection, setSelection] = useState<SelectionState<number>>(emptySelection)
 
   const rows = useMemo(
     () => (query.data ? toProxyRows(query.data.health, query.data.proxies) : []),
     [query.data]
   )
+  const now = useNow(nowTickMs(rows))
+  const elapsed = query.dataUpdatedAt ? Math.max(0, Math.floor((now - query.dataUpdatedAt) / 1000)) : 0
   const counts = useMemo(() => filterCounts(rows), [rows])
   const visible = useMemo(
     () => sortProxies(searchProxies(filterProxies(rows, filter), search), sort, dir),
@@ -150,36 +149,12 @@ export default function ProxiesPage() {
     saveProxies({ enabled }).catch((error) => notify.error(error))
   }
 
-  const rowActions: ProxyRowActions = {
-    edit: (index) => setEditingIndex(index),
-    remove: async (index) => {
-      const addr = rows.find((r) => r.index === index)?.proxy ?? ""
-      const ok = await confirmDestructive({
-        title: PROXY_CONFIRM.deleteOne(addr),
-        description: PROXY_CONFIRM.deleteDesc,
-        confirmText: PROXY_CONFIRM.deleteYes,
-      })
-      if (!ok || !query.data) return
-      const next = query.data.proxies.filter((_, i) => i !== index)
-      const login = indexesAfterRemoval(loginIndexes(rows), index)
-      const publish = indexesAfterRemoval(publishIndexes(rows), index)
-      const off = indexesAfterRemoval(offIndexes(rows), index)
-      try {
-        // next пуст — это и есть явное «удалить последнюю строку» (T-201)
-        const res = await saveProxiesLines(next, {
-          allowEmpty: next.length === 0,
-          login,
-          publish,
-          off,
-        })
-        if (res) notify.ok(PROXIES_TOAST.deleted(addr))
-        setSelection(emptySelection())
-      } catch (error) {
-        notify.error(error, PROXIES_TOAST.notDeleted)
-      }
-    },
-    rotate: async (index) => {
-      setRotateBusy(index)
+  const rotate = async (targets: ProxyRow[]) => {
+    if (operations.current.removing) return
+    const ready = targets.filter((r) => isEnabled(r) && canRotate(r, elapsed) && !operations.current.rotating.has(r.index))
+    for (const { index } of ready) operations.current.rotating.add(index)
+    setRotateBusy(new Set(operations.current.rotating))
+    for (const { index } of ready) {
       try {
         const res = await rotateProxy(index)
         const outcome = rotateOutcome(res)
@@ -188,92 +163,62 @@ export default function ProxiesPage() {
       } catch (error) {
         notify.error(error, PROXIES_TOAST.notRotated)
       } finally {
-        setRotateBusy(null)
+        operations.current.rotating.delete(index)
+        setRotateBusy(new Set(operations.current.rotating))
       }
-    },
-    renew: async (index) => {
-      const n = query.data ? readNoshadow(query.data.proxies[index] ?? "") : null
-      if (!query.data || !n) return
-      const next = [...query.data.proxies]
-      next[index] = writeNoshadow(patchNoshadow(n, { renew: true }))
-      const addr = rows.find((r) => r.index === index)?.proxy ?? ""
-      try {
-        await saveProxiesLines(next, { login: loginIndexes(rows), publish: publishIndexes(rows), registration: registrationIndexes(rows), off: offIndexes(rows) })
-        notify.ok(PROXIES_TOAST.renewed(addr))
-      } catch (error) {
-        notify.error(error, PROXIES_TOAST.notChanged)
+    }
+  }
+
+  const renew = async (targets: ProxyRow[]) => {
+    if (!query.data) return
+    const indexes = new Set(targets.filter((r) => isEnabled(r) && r.noshadow && r.noshadow.minutes > 0).map((r) => r.index))
+    if (!indexes.size) return
+    if (query.data.proxies.some((line, index) => !indexes.has(index) && !parseProxyLine(line))) {
+      notify.warn(PROXIES_TOAST.notChanged)
+      return
+    }
+    const next = query.data.proxies.map((line, index) => {
+      const n = indexes.has(index) ? readNoshadow(line) : null
+      return n ? writeNoshadow(patchNoshadow(n, { renew: true })) : line
+    })
+    try {
+      const res = await saveProxiesLines(next, { login: loginIndexes(rows), publish: publishIndexes(rows), registration: registrationIndexes(rows), off: offIndexes(rows) })
+      const error = res?.errors?.[0]?.error
+      if (error) {
+        notify.warn(sentence(error))
+        return
       }
-    },
-    /* Отметки «выключена», «вход» и «публикация» — номера строк по ВСЕМУ списку (`rows`,
-       он строится из data.health целиком, до срезов и поиска), а не по
-       видимому куску экрана: иначе строки, скрытые фильтром, потеряли бы
-       свою отметку при следующей отправке. */
-    toggleEnabled: async (index) => {
-      const target = rows.find((r) => r.index === index)
-      if (!target) return
-      const wasEnabled = isEnabled(target)
-      const off = offIndexes(rows)
-      const next = wasEnabled ? [...off, index] : off.filter((i) => i !== index)
-      try {
-        await saveProxies({ off: next })
-        notify.ok(wasEnabled ? PROXIES_TOAST.disabled(target.proxy) : PROXIES_TOAST.enabled(target.proxy))
-      } catch (error) {
-        notify.error(error, PROXIES_TOAST.notToggled)
-      }
-    },
-    toggleLogin: async (index, checked) => {
-      const login = loginIndexes(rows)
-      const next = checked ? [...login, index] : login.filter((i) => i !== index)
-      try {
-        await saveProxies({ login: next })
-      } catch (error) {
-        notify.error(error, PROXIES_TOAST.notLogin)
-      }
-    },
-    toggleRegistration: async (index, checked) => {
-      const registration = registrationIndexes(rows)
-      const next = checked ? [...registration, index] : registration.filter((i) => i !== index)
-      try {
-        await saveProxies({ registration: next })
-      } catch (error) {
-        notify.error(error, PROXIES_TOAST.notRegistration)
-      }
-    },
-    togglePublish: async (index, checked) => {
-      const publish = publishIndexes(rows)
-      const next = checked ? [...publish, index] : publish.filter((i) => i !== index)
-      try {
-        await saveProxies({ publish: next })
-      } catch (error) {
-        notify.error(error, PROXIES_TOAST.notPublish)
-      }
-    },
+      if (res) notify.ok(targets.length === 1 ? PROXIES_TOAST.renewed(targets[0].proxy) : PROXIES_TOAST.changed(indexes.size))
+    } catch (error) {
+      notify.error(error, PROXIES_TOAST.notChanged)
+    }
   }
 
   /* Удалить несколько строк разом (мёртвые, выбранные). Отметки остальных
      строк пересчитываются с конца, чтобы номера не съезжали от уже убранных;
      после удаления номера съезжают — выбор снимается целиком. */
   const removeIndexes = async (indexes: number[], title: string) => {
-    if (!query.data || !indexes.length) return
-    const ok = await confirmDestructive({
-      title,
-      description: PROXY_CONFIRM.deleteDesc,
-      confirmText: PROXY_CONFIRM.deleteYes,
-    })
-    if (!ok) return
-    const gone = new Set(indexes)
-    const next = query.data.proxies.filter((_, i) => !gone.has(i))
-    let login = loginIndexes(rows)
-    let publish = publishIndexes(rows)
-    let registration = registrationIndexes(rows)
-    let off = offIndexes(rows)
-    for (const index of [...indexes].sort((a, b) => b - a)) {
-      login = indexesAfterRemoval(login, index)
-      publish = indexesAfterRemoval(publish, index)
-      registration = indexesAfterRemoval(registration, index)
-      off = indexesAfterRemoval(off, index)
-    }
+    if (!query.data || !indexes.length || operations.current.removing || operations.current.rotating.size) return
+    operations.current.removing = true
     try {
+      const ok = await confirmDestructive({
+        title,
+        description: PROXY_CONFIRM.deleteDesc,
+        confirmText: PROXY_CONFIRM.deleteYes,
+      })
+      if (!ok || operations.current.rotating.size) return
+      const gone = new Set(indexes)
+      const next = query.data.proxies.filter((_, i) => !gone.has(i))
+      let login = loginIndexes(rows)
+      let publish = publishIndexes(rows)
+      let registration = registrationIndexes(rows)
+      let off = offIndexes(rows)
+      for (const index of [...indexes].sort((a, b) => b - a)) {
+        login = indexesAfterRemoval(login, index)
+        publish = indexesAfterRemoval(publish, index)
+        registration = indexesAfterRemoval(registration, index)
+        off = indexesAfterRemoval(off, index)
+      }
       const res = await saveProxiesLines(next, { allowEmpty: next.length === 0, login, publish, registration, off })
       if (res) notify.ok(PROXIES_TOAST.deletedMany(indexes.length))
       clearSelection()
@@ -281,11 +226,14 @@ export default function ProxiesPage() {
     } catch (error) {
       notify.error(error, PROXIES_TOAST.notDeleted)
       return false
+    } finally {
+      operations.current.removing = false
     }
   }
 
   /* Мёртвые — пачкой: по одной их удалять долго, а держать незачем. */
   const removeDead = async () => {
+    if (rotateBusy.size) return
     const dead = rows.filter((r) => r.state === "dead").map((r) => r.index)
     if (await removeIndexes(dead, PROXY_CONFIRM.deleteDead(dead.length))) setFilter("all")
   }
@@ -293,56 +241,51 @@ export default function ProxiesPage() {
   /* Действия над выбранными — те же, что у строки, только пачкой. Отметки
      считаются по всему списку, как и у одиночных: скрытые срезом строки
      своих отметок не теряют. */
-  const setMarks = async (patch: { off?: number[]; login?: number[]; publish?: number[]; registration?: number[] }, done?: string) => {
+  const setMarks = async (patch: { off?: number[]; login?: number[]; publish?: number[]; registration?: number[] }, done?: string, failed: string = PROXIES_TOAST.notToggled) => {
     try {
       await saveProxies(patch)
       if (done) notify.ok(done)
     } catch (error) {
-      notify.error(error, PROXIES_TOAST.notToggled)
+      notify.error(error, failed)
     }
   }
   const union = (a: number[], b: number[]) => [...new Set([...a, ...b])]
   const minus = (a: number[], b: Set<number>) => a.filter((i) => !b.has(i))
-  const chosenIdx = chosen.map((r) => r.index)
+  const mark = (field: "login" | "publish" | "registration", indexes: number[], checked: boolean) => {
+    const current = field === "login" ? loginIndexes(rows) : field === "publish" ? publishIndexes(rows) : registrationIndexes(rows)
+    const failed = field === "login" ? PROXIES_TOAST.notLogin : field === "publish" ? PROXIES_TOAST.notPublish : PROXIES_TOAST.notRegistration
+    return setMarks({ [field]: checked ? union(current, indexes) : minus(current, new Set(indexes)) }, undefined, failed)
+  }
 
-  const removeChosen = () =>
-    void removeIndexes(chosenIdx, PROXY_CONFIRM.deleteMany(chosenIdx.length))
-
-  const copyChosen = () =>
-    copyWithToast(chosen.map((r) => r.proxy).join("\n"), PROXIES_TOAST.copied(chosen.length))
-
-  const anyOn = chosen.some((r) => isEnabled(r))
-  const chosenNoshadow = chosen.filter((r) => r.noshadow).map((r) => r.index)
-  const anyOff = chosen.some((r) => !isEnabled(r))
-  const bulk: BarAction[] = [
-    ...(anyOn
-      ? [{
-          key: "disable",
-          label: PROXY_BULK.disable,
-          icon: PowerOffIcon,
-          onClick: () => void setMarks({ off: union(offIndexes(rows), chosenIdx) }, PROXIES_TOAST.disabledMany(chosenIdx.length)),
-        }]
-      : []),
-    ...(anyOff
-      ? [{
-          key: "enable",
-          label: PROXY_BULK.enable,
-          icon: PowerIcon,
-          onClick: () => void setMarks({ off: minus(offIndexes(rows), selected) }, PROXIES_TOAST.enabledMany(chosenIdx.length)),
-        }]
-      : []),
-    { key: "copy", label: PROXY_BULK.copy, icon: CopyIcon, onClick: () => void copyChosen() },
-    { key: "login-on", label: PROXY_BULK.loginOn, icon: LogInIcon, onClick: () => void setMarks({ login: union(loginIndexes(rows), chosenIdx) }) },
-    { key: "login-off", label: PROXY_BULK.loginOff, icon: LogInIcon, onClick: () => void setMarks({ login: minus(loginIndexes(rows), selected) }) },
-    { key: "registration-on", label: PROXY_BULK.registrationOn, icon: LogInIcon, onClick: () => void setMarks({ registration: union(registrationIndexes(rows), chosenIdx) }) },
-    { key: "registration-off", label: PROXY_BULK.registrationOff, icon: LogInIcon, onClick: () => void setMarks({ registration: minus(registrationIndexes(rows), selected) }) },
-    { key: "publish-on", label: PROXY_BULK.publishOn, icon: SendIcon, onClick: () => void setMarks({ publish: union(publishIndexes(rows), chosenIdx) }) },
-    { key: "publish-off", label: PROXY_BULK.publishOff, icon: SendIcon, onClick: () => void setMarks({ publish: minus(publishIndexes(rows), selected) }) },
-    ...(chosenNoshadow.length
-      ? [{ key: "noshadow", label: NOSHADOW_LABEL.bulk, icon: GlobeIcon, onClick: () => setNoshadow(chosenNoshadow) }]
-      : []),
-    { key: "remove", label: PROXY_BULK.remove, icon: Trash2Icon, destructive: true, separatorBefore: true, onClick: removeChosen },
-  ]
+  const actionsFor = (targets: ProxyRow[]) => {
+    const indexes = targets.map((r) => r.index)
+    const run: Record<ProxyActionKey, () => void> = {
+      edit: () => setEditingIndex(indexes[0]),
+      disable: () => void setMarks({ off: union(offIndexes(rows), indexes) }, PROXIES_TOAST.disabledMany(indexes.length)),
+      enable: () => void setMarks({ off: minus(offIndexes(rows), new Set(indexes)) }, PROXIES_TOAST.enabledMany(indexes.length)),
+      copy: () => void copyWithToast(targets.map((r) => r.proxy).join("\n"), PROXIES_TOAST.copied(targets.length)),
+      "login-on": () => void mark("login", indexes, true),
+      "login-off": () => void mark("login", indexes, false),
+      "registration-on": () => void mark("registration", indexes, true),
+      "registration-off": () => void mark("registration", indexes, false),
+      "publish-on": () => void mark("publish", indexes, true),
+      "publish-off": () => void mark("publish", indexes, false),
+      noshadow: () => setNoshadow(targets.filter((r) => r.noshadow).map((r) => r.index)),
+      renew: () => void renew(targets),
+      rotate: () => void rotate(targets),
+      remove: () => void removeIndexes(indexes, targets.length === 1 ? PROXY_CONFIRM.deleteOne(targets[0].proxy) : PROXY_CONFIRM.deleteMany(targets.length)),
+    }
+    return proxyActions(targets, (key) => run[key](), { elapsed, rotateBusy })
+  }
+  const rowActions: ProxyRowActions = {
+    menu: actionsFor,
+    toggleLogin: (index, checked) => void mark("login", [index], checked),
+    toggleRegistration: (index, checked) => void mark("registration", [index], checked),
+    togglePublish: (index, checked) => void mark("publish", [index], checked),
+  }
+  // Building this list only captures handlers; the ref is read when an action runs.
+  // oxlint-disable-next-line react/refs
+  const bulk = actionsFor(chosen)
 
   const tabs = (Object.keys(FILTER_LABEL) as ProxiesFilter[])
     .filter((value) => value === "all" || counts[value] || value === filter)
@@ -409,7 +352,6 @@ export default function ProxiesPage() {
     list = (
       <ProxiesTable
         rows={visible}
-        fetchedAt={query.dataUpdatedAt}
         sort={sort}
         dir={dir}
         onSort={onSort}
@@ -451,7 +393,7 @@ export default function ProxiesPage() {
                 <Label htmlFor="proxies-use">{PROXIES_LABEL.use}</Label>
               </div>
               {filter === "dead" && counts.dead ? (
-                <Button variant="destructive" onClick={() => void removeDead()}>
+                <Button variant="destructive" disabled={rotateBusy.size > 0} onClick={() => void removeDead()}>
                   <Trash2Icon />
                   {PROXIES_LABEL.removeDead}
                 </Button>

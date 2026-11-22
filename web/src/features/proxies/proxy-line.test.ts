@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process"
 import { describe, expect, it } from "vitest"
 
 import { buildProxyLine, parseProxyLine } from "./proxy-line"
@@ -64,9 +65,9 @@ describe("разбор строки", () => {
     expect(got?.password).toBe("100%off")
   })
 
-  it("собранная строка уходит НЕ закодированной — кодирует сервер", () => {
+  it("собранная строка кодирует пароль обратно ровно один раз", () => {
     const got = parseProxyLine("http://myuser:gjfnix054%24@proxy.example.com:9696")
-    expect(buildProxyLine(got!)).toBe("http://myuser:gjfnix054$@proxy.example.com:9696")
+    expect(buildProxyLine(got!)).toBe("http://myuser:gjfnix054%24@proxy.example.com:9696")
   })
 
   it("мусор — не разобралось, а не потерялось молча", () => {
@@ -96,5 +97,34 @@ describe("сборка строки", () => {
   it("собранную строку разбор снова читает так же", () => {
     const fields = { scheme: "socks4", login: "a", password: "b", host: "host.name", port: "1111", rotateUrl: "" }
     expect(parseProxyLine(buildProxyLine(fields))).toEqual(fields)
+  })
+
+  it("preserves reserved credentials through the generic Edit panel, too", () => {
+    const fields = { scheme: "http", login: "fixture@name", password: "synthetic@:/#%40'quote", host: "proxy.noshadow.pro", port: "6969", rotateUrl: "" }
+    expect(parseProxyLine(buildProxyLine(fields))).toEqual(fields)
+  })
+
+  it("preserves valid credential escapes mixed with a bare percent through the frontend and backend", () => {
+    const line = "http://fixture:synthetic%40token%off@proxy.noshadow.pro:6969"
+    const fields = parseProxyLine(line)!
+    const rebuilt = buildProxyLine(fields)
+    const python = spawnSync(globalThis.process.env.PYTHON || (globalThis.process.platform === "win32" ? "python" : "python3"), ["-c", String.raw`
+import json, sys
+from urllib.parse import unquote, urlsplit
+from modules import proxies
+result = []
+for line in json.load(sys.stdin):
+    entry, error = proxies.parse_line(line)
+    assert entry is not None and not error
+    url = urlsplit(entry.url)
+    result.append([unquote(url.username), unquote(url.password)])
+print(json.dumps(result))
+`], { cwd: new URL("../../../../", import.meta.url), env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1", NIMBUS_DATA_ROOT: "" },
+      input: JSON.stringify([line, rebuilt]), encoding: "utf8" })
+    expect(python.status, python.stderr).toBe(0)
+    expect(fields.password).toBe("synthetic@token%off")
+    expect(JSON.parse(python.stdout)).toEqual([
+      ["fixture", "synthetic@token%off"], ["fixture", "synthetic@token%off"],
+    ])
   })
 })

@@ -55,7 +55,12 @@ export interface Noshadow {
   session: string
   /** сколько минут держать IP; 0 — ротация на каждое соединение */
   minutes: number
+  /** An explicit time-0 must not become an unsuffixed account route. */
+  durationSuffix?: boolean
   transport: Transport
+  /** Preserve existing endpoint variants unless the user changes transport. */
+  scheme?: string
+  port?: string
   /** ссылка смены IP, если человек её приклеил к строке */
   rotateUrl: string
 }
@@ -74,13 +79,19 @@ export function readNoshadow(line: string): Noshadow | null {
   const cut = f.login.search(SUFFIX_START)
   const base = cut < 0 ? f.login : f.login.slice(0, cut)
   const tail = cut < 0 ? "" : f.login.slice(cut)
-  const out: Noshadow = { base, password: f.password, country: "", session: "", minutes: 0, transport, rotateUrl: f.rotateUrl }
+  const out: Noshadow = { base, password: f.password, country: "", session: "", minutes: 0, transport, rotateUrl: f.rotateUrl,
+    ...(f.scheme !== SCHEME[transport] ? { scheme: f.scheme } : {}),
+    ...(f.port !== PORT[transport] ? { port: f.port } : {}),
+  }
   let used = 0
   for (const [whole, key, value] of tail.matchAll(SUFFIX)) {
     used += whole.length
     if (key === "country") out.country = value.toUpperCase()
     else if (key === "session") out.session = value
-    else out.minutes = Number(value)
+    else {
+      out.minutes = Number(value)
+      out.durationSuffix = true
+    }
   }
   // минуты — только целое число: «-time-abc» дал бы NaN и прошёл бы проверку
   if (!base || used !== tail.length || !Number.isInteger(out.minutes) || out.minutes > MAX_MINUTES)
@@ -94,13 +105,13 @@ export function writeNoshadow(n: Noshadow): string {
     n.base +
     (n.country ? `-country-${n.country}` : "") +
     (n.session ? `-session-${n.session}` : "") +
-    (n.minutes > 0 ? `-time-${n.minutes}` : "")
+    (n.minutes > 0 || n.durationSuffix ? `-time-${n.minutes}` : "")
   return buildProxyLine({
-    scheme: SCHEME[n.transport],
+    scheme: n.scheme ?? SCHEME[n.transport],
     login,
     password: n.password,
     host: NOSHADOW_HOST,
-    port: PORT[n.transport],
+    port: n.port ?? PORT[n.transport],
     rotateUrl: n.rotateUrl,
   })
 }
@@ -121,13 +132,18 @@ export interface NoshadowPatch {
   renew?: boolean
 }
 
-/** Применить правку. Липкому IP нужна сессия — строке без неё заводим новую;
+/** Применить правку. При явном переходе на липкий IP заводим недостающую сессию;
     при переходе на ротацию сессию оставляем: без -time она IP не держит, а
     строка остаётся отдельной и не схлопнется с соседкой. Сам id не меняется
     никогда, кроме renew: тот же id — тот же IP, новый IP — только новый id. */
 export function patchNoshadow(n: Noshadow, { renew, ...patch }: NoshadowPatch): Noshadow {
   const next = { ...n, ...patch }
-  if (renew || (next.minutes > 0 && !next.session)) next.session = newSession()
+  if (patch.transport != null) {
+    delete next.scheme
+    delete next.port
+  }
+  if (patch.minutes != null) next.durationSuffix = true
+  if (renew || (patch.minutes != null && patch.minutes > 0 && n.minutes === 0 && !next.session)) next.session = newSession()
   return next
 }
 

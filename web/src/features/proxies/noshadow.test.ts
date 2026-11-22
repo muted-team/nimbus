@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process"
 import { describe, expect, it } from "vitest"
 
 import {
@@ -19,6 +20,7 @@ describe("readNoshadow", () => {
       country: "US",
       session: "ab12",
       minutes: 15,
+      durationSuffix: true,
       transport: "socks",
       rotateUrl: "",
     })
@@ -49,10 +51,26 @@ describe("readNoshadow", () => {
 describe("writeNoshadow", () => {
   it("собирает строку обратно", () => {
     const n = readNoshadow(SOCKS)!
-    expect(writeNoshadow(n)).toBe("socks5://acc-country-US-session-ab12-time-15:p@ss@proxy.noshadow.pro:9696")
+    expect(writeNoshadow(n)).toBe("socks5://acc-country-US-session-ab12-time-15:p%40ss@proxy.noshadow.pro:9696")
     expect(writeNoshadow({ ...n, transport: "http", minutes: 0 })).toBe(
-      "http://acc-country-US-session-ab12:p@ss@proxy.noshadow.pro:6969"
+      "http://acc-country-US-session-ab12-time-0:p%40ss@proxy.noshadow.pro:6969"
     )
+  })
+
+  it("reopens the same settings with reserved characters in credentials", () => {
+    const n = { ...readNoshadow(SOCKS)!, base: "fixture@name", password: "synthetic@:/#%40" }
+    expect(readNoshadow(writeNoshadow(n))).toEqual(n)
+  })
+
+  it("escapes apostrophes that the API proxy parser treats as pasted quotation marks", () => {
+    const n = { ...readNoshadow(SOCKS)!, password: "synthetic'quote" }
+    expect(writeNoshadow(n)).toContain("synthetic%27quote")
+  })
+
+  it("does not reset a saved alternate SOCKS port or DNS scheme when changing the country", () => {
+    const line = "socks5h://fixture-country-US-session-ab12-time-45:synthetic@proxy.noshadow.pro:1080"
+    const changed = writeNoshadow(patchNoshadow(readNoshadow(line)!, { country: "GB" }))
+    expect(changed).toBe(line.replace("country-US", "country-GB"))
   })
 })
 
@@ -77,6 +95,48 @@ describe("patchNoshadow", () => {
   it("не заданное в правке остаётся как было", () => {
     const n = readNoshadow(SOCKS)!
     expect(patchNoshadow(n, { country: "GB" })).toEqual({ ...n, country: "GB" })
+  })
+
+  it("switching transport replaces alternate endpoint fields with the chosen defaults", () => {
+    const n = readNoshadow("socks5h://fixture-country-US-session-ab12-time-45:synthetic@proxy.noshadow.pro:1080")!
+    expect(writeNoshadow(patchNoshadow(n, { transport: "http" }))).toBe(
+      "http://fixture-country-US-session-ab12-time-45:synthetic@proxy.noshadow.pro:6969"
+    )
+    expect(writeNoshadow(patchNoshadow(n, { renew: true }))).toMatch(/^socks5h:.*:1080$/)
+  })
+
+  it("an explicit transport choice applies its default even within the same SOCKS family", () => {
+    const n = readNoshadow("socks5h://fixture-country-US-session-ab12-time-45:synthetic@proxy.noshadow.pro:1080")!
+    expect(writeNoshadow(patchNoshadow(n, { transport: "socks" }))).toBe(
+      "socks5://fixture-country-US-session-ab12-time-45:synthetic@proxy.noshadow.pro:9696"
+    )
+  })
+
+  it.each([0, 45])("country-only editing preserves explicit time-%i without inserting a session", (minutes) => {
+    const line = `http://fixture-country-US-time-${minutes}:synthetic@proxy.noshadow.pro:6969`
+    const changed = writeNoshadow(patchNoshadow(readNoshadow(line)!, { country: "GB" }))
+    expect(changed).toBe(line.replace("country-US", "country-GB"))
+    const python = spawnSync(process.env.PYTHON || (process.platform === "win32" ? "python" : "python3"), ["-c", String.raw`
+import json, sys
+from modules import proxies
+line = json.load(sys.stdin)
+print(json.dumps(proxies.noshadow_session(line, "synthetic")))
+`], { cwd: new URL("../../../../", import.meta.url), env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1", NIMBUS_DATA_ROOT: "" },
+      input: JSON.stringify(changed), encoding: "utf8" })
+    expect(python.status, python.stderr).toBe(0)
+    expect(JSON.parse(python.stdout)).toBe(changed)
+  })
+
+  it("records an explicit rotation choice as time-0 without creating a session", () => {
+    const line = "http://fixture-country-US:synthetic@proxy.noshadow.pro:6969"
+    expect(writeNoshadow(patchNoshadow(readNoshadow(line)!, { minutes: 0 }))).toBe(
+      "http://fixture-country-US-time-0:synthetic@proxy.noshadow.pro:6969"
+    )
+  })
+
+  it("does not insert a session just because an already sticky duration changes", () => {
+    const line = "http://fixture-country-US-time-45:synthetic@proxy.noshadow.pro:6969"
+    expect(writeNoshadow(patchNoshadow(readNoshadow(line)!, { minutes: 60 }))).toBe(line.replace("time-45", "time-60"))
   })
 })
 

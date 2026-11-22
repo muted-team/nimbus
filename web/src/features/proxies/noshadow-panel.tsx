@@ -19,6 +19,7 @@ import {
 } from "@/components/ui/sheet"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { notify } from "@/lib/notify"
+import { sentence } from "@/lib/format"
 import { cn } from "@/lib/utils"
 
 import { NOSHADOW_LABEL as L, PROXIES_TOAST } from "./labels"
@@ -76,13 +77,29 @@ export function NoshadowPanel({
   useLanguage()
   const edit = editing != null
   const accounts = useMemo(() => noshadowAccounts(proxies), [proxies])
+  const [initial] = useState(() => {
+    const chosen = (editing ?? []).map((index) => readNoshadow(proxies[index] ?? "")).filter((n) => n != null)
+    const first = chosen[0]
+    return {
+      country: chosen.every((n) => n.country === first?.country) ? first?.country : undefined,
+      minutes: chosen.every((n) => n.minutes === first?.minutes) ? first?.minutes : undefined,
+      transport: chosen.every((n) =>
+        n.transport === first?.transport && n.scheme === first?.scheme && n.port === first?.port
+      ) ? first?.transport : undefined,
+      scheme: chosen.every((n) => n.scheme === first?.scheme) ? first?.scheme : undefined,
+      port: chosen.every((n) => n.port === first?.port) ? first?.port : undefined,
+    }
+  })
 
   const [account, setAccount] = useState(accounts[0]?.base ?? OTHER)
   const [pasted, setPasted] = useState("")
-  const [countries, setCountries] = useState<string[]>(edit ? [] : ["US"])
-  const [mode, setMode] = useState<Keep<"rotation" | "sticky">>(edit ? "keep" : "sticky")
-  const [minutes, setMinutes] = useState(String(DEFAULT_MINUTES))
-  const [transport, setTransport] = useState<Keep<Transport>>(edit ? "keep" : "http")
+  const [countries, setCountries] = useState<string[]>(
+    edit ? initial.country ? [initial.country] : [] : ["US"]
+  )
+  const savedMode = initial.minutes == null ? "keep" : initial.minutes > 0 ? "sticky" : "rotation"
+  const [mode, setMode] = useState<Keep<"rotation" | "sticky">>(edit ? savedMode : "sticky")
+  const [minutes, setMinutes] = useState(String(initial.minutes || DEFAULT_MINUTES))
+  const [transport, setTransport] = useState<Keep<Transport>>(edit ? initial.transport ?? "keep" : "http")
   const [perCountry, setPerCountry] = useState("1")
   const [renew, setRenew] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -94,12 +111,19 @@ export function NoshadowPanel({
       ? readNoshadowAccount(pasted)
       : accounts.find((a) => a.base === account) ?? null
 
+  const patch: NoshadowPatch = {}
+  if (countries[0] && countries[0] !== initial.country) patch.country = countries[0]
+  const duration = mode === "sticky" ? mins : 0
+  if (mode !== "keep" && duration !== initial.minutes) patch.minutes = duration
+  if (transport !== "keep" && transport !== initial.transport) patch.transport = transport
+  if (renew) patch.renew = true
+
   const save = async (next: string[], done: string) => {
     // две одинаковые строки сервер свёл бы в одну, и отметки съехали бы;
-    // сравниваем разобранный вид: пароль в списке закодирован, у новых — нет
+    // сравниваем канонический вид, чтобы разное кодирование не скрыло дубль
     const key = (line: string) => {
       const n = readNoshadow(line)
-      return n ? writeNoshadow(n) : line
+      return n ? writeNoshadow({ ...n, rotateUrl: "" }) : line
     }
     if (new Set(next.map(key)).size !== next.length) {
       notify.warn(PROXIES_TOAST.wouldMerge)
@@ -108,6 +132,11 @@ export function NoshadowPanel({
     setSaving(true)
     try {
       const res = await saveProxiesLines(next, marks)
+      const error = res?.errors?.[0]?.error
+      if (error) {
+        notify.warn(sentence(error))
+        return
+      }
       if (res) notify.ok(done)
       onClose()
     } catch (error) {
@@ -119,11 +148,6 @@ export function NoshadowPanel({
 
   const submit = () => {
     if (edit) {
-      const patch: NoshadowPatch = {}
-      if (countries[0]) patch.country = countries[0]
-      if (mode !== "keep") patch.minutes = mode === "sticky" ? mins : 0
-      if (transport !== "keep") patch.transport = transport
-      if (renew) patch.renew = true
       const chosen = new Set(editing)
       const next = proxies.map((line, i) => {
         const n = chosen.has(i) ? readNoshadow(line) : null
@@ -147,7 +171,7 @@ export function NoshadowPanel({
   }
 
   const ready = edit
-    ? countries.length > 0 || mode !== "keep" || transport !== "keep" || renew
+    ? Object.keys(patch).length > 0
     : !!creds && countries.length > 0
 
   return (
@@ -212,8 +236,8 @@ export function NoshadowPanel({
                 aria-label={L.transport}
               >
                 {edit ? <ToggleGroupItem value="keep">{L.keep}</ToggleGroupItem> : null}
-                <ToggleGroupItem value="http">{L.http}</ToggleGroupItem>
-                <ToggleGroupItem value="socks">{L.socks}</ToggleGroupItem>
+                <ToggleGroupItem value="http">{initial.transport === "http" && (initial.scheme || initial.port) ? `${initial.scheme ?? "http"} ${initial.port ?? "6969"}` : L.http}</ToggleGroupItem>
+                <ToggleGroupItem value="socks">{initial.transport === "socks" && (initial.scheme || initial.port) ? `${initial.scheme ?? "socks"} ${initial.port ?? "9696"}` : L.socks}</ToggleGroupItem>
               </ToggleGroup>
             </Field>
             {edit ? null : (

@@ -1,7 +1,7 @@
 import { t, useLanguage } from "@/lib/i18n"
 import { userMessage } from "@/api/client"
 import { Fragment, useState, type ComponentType, type ReactNode } from "react"
-import { EllipsisIcon, PencilIcon, PowerIcon, RefreshCwIcon, Trash2Icon } from "lucide-react"
+import { EllipsisIcon } from "lucide-react"
 
 import { Flag } from "@/components/flag"
 import type { BarAction } from "@/components/selection-bar"
@@ -11,6 +11,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import {
   ContextMenu,
   ContextMenuContent,
+  ContextMenuGroup,
   ContextMenuItem,
   ContextMenuSeparator,
   ContextMenuTrigger,
@@ -18,6 +19,7 @@ import {
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
@@ -31,8 +33,7 @@ import { cn } from "@/lib/utils"
 
 import { CELL } from "./columns"
 import { isEnabled, type ProxyRow } from "./filter"
-import { canRotate, rotateLeft } from "./health"
-import { checkedAgo, NOSHADOW_LABEL, noshadowMode, PROXIES_LABEL, PROXY_ACTION, rotateWait, STATE_WORD } from "./labels"
+import { checkedAgo, noshadowMode, PROXIES_LABEL, PROXY_ACTION, STATE_WORD } from "./labels"
 
 /* Строка настоящей `<table>` (не сетки — виртуализации здесь нет, строк
    десятки, не сотни): адрес и состояние, страна, числа, группы входа и публикации,
@@ -54,12 +55,7 @@ const DOT_TONE: Record<ProxyRow["state"], Tone> = {
 const TD = "px-3 py-2"
 
 export interface ProxyRowActions {
-  edit: (index: number) => void
-  remove: (index: number) => void
-  rotate: (index: number) => void
-  /** noshadow с липким IP: новая сессия — новый IP */
-  renew: (index: number) => void
-  toggleEnabled: (index: number) => void
+  menu: (rows: ProxyRow[]) => BarAction[]
   toggleLogin: (index: number, checked: boolean) => void
   togglePublish: (index: number, checked: boolean) => void
   toggleRegistration: (index: number, checked: boolean) => void
@@ -78,55 +74,24 @@ interface ProxyMenuItemProps {
    («Сменить IP» / «смена через 30 с») она была то шире, то уже соседних
    строк — на широких таблицах последняя колонка обрезалась краем панели. */
 function ActionItems({
-  row,
   actions,
-  elapsed,
-  rotateBusy,
   Item,
   Separator,
 }: {
-  row: ProxyRow
-  actions: ProxyRowActions
-  elapsed: number
-  rotateBusy: boolean
+  actions: BarAction[]
   Item: ComponentType<ProxyMenuItemProps>
   Separator: ComponentType
 }) {
   useLanguage()
-  const enabled = isEnabled(row)
-  const wait = rotateWait(rotateLeft(row, elapsed))
-  return (
-    <>
-      <Item onClick={() => actions.edit(row.index)}>
-        <PencilIcon />
-        {PROXY_ACTION.edit}
+  return actions.map((action) => (
+    <Fragment key={action.key}>
+      {action.separatorBefore ? <Separator /> : null}
+      <Item disabled={action.disabled} variant={action.destructive ? "destructive" : "default"} onClick={action.onClick}>
+        <action.icon />
+        {action.label}
       </Item>
-      <Item onClick={() => actions.toggleEnabled(row.index)}>
-        <PowerIcon />
-        {enabled ? PROXY_ACTION.disable : PROXY_ACTION.enable}
-      </Item>
-      {row.noshadow && row.noshadow.minutes > 0 ? (
-        <Item disabled={!enabled} onClick={() => actions.renew(row.index)}>
-          <RefreshCwIcon />
-          {NOSHADOW_LABEL.renew}
-        </Item>
-      ) : null}
-      {row.rotating ? (
-        <Item
-          disabled={!enabled || !canRotate(row, elapsed) || rotateBusy}
-          onClick={() => actions.rotate(row.index)}
-        >
-          {rotateBusy ? <Spinner className="size-3.5" /> : <RefreshCwIcon />}
-          {rotateBusy ? PROXIES_LABEL.rotating : wait || PROXIES_LABEL.rotate}
-        </Item>
-      ) : null}
-      <Separator />
-      <Item variant="destructive" onClick={() => actions.remove(row.index)}>
-        <Trash2Icon />
-        {PROXY_ACTION.remove}
-      </Item>
-    </>
-  )
+    </Fragment>
+  ))
 }
 
 /* Выбор — как у аккаунтов: флажок, клик по строке, Ctrl и Shift. Своей
@@ -138,7 +103,6 @@ function ActionItems({
    по любой другой — выбор переходит на неё и меню этой строки. */
 export function ProxyTableRow({
   row,
-  elapsed,
   rotateBusy,
   actions,
   selected,
@@ -147,8 +111,6 @@ export function ProxyTableRow({
   bulk,
 }: {
   row: ProxyRow
-  /** секунд с момента снимка — отсчёт смены IP идёт от него */
-  elapsed: number
   /** смена IP идёт именно у этой строки */
   rotateBusy: boolean
   actions: ProxyRowActions
@@ -163,6 +125,7 @@ export function ProxyTableRow({
   const enabled = isEnabled(row)
   const press = usePressOrigin()
   const [overSelection, setOverSelection] = useState(false)
+  const menu = actions.menu([row])
   return (
     <ContextMenu>
       <ContextMenuTrigger
@@ -301,44 +264,18 @@ export function ProxyTableRow({
                 {rotateBusy ? <Spinner className="size-3.5" /> : <EllipsisIcon />}
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="min-w-44">
-                <ActionItems
-                  row={row}
-                  actions={actions}
-                  elapsed={elapsed}
-                  rotateBusy={rotateBusy}
-                  Item={DropdownMenuItem}
-                  Separator={DropdownMenuSeparator}
-                />
+                <DropdownMenuGroup>
+                  <ActionItems actions={menu} Item={DropdownMenuItem} Separator={DropdownMenuSeparator} />
+                </DropdownMenuGroup>
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
         </td>
       </ContextMenuTrigger>
       <ContextMenuContent className="w-auto min-w-44">
-        {overSelection ? (
-          bulk.map((a) => (
-            <Fragment key={a.key}>
-              {a.separatorBefore ? <ContextMenuSeparator /> : null}
-              <ContextMenuItem
-                disabled={a.disabled}
-                variant={a.destructive ? "destructive" : "default"}
-                onClick={a.onClick}
-              >
-                <a.icon />
-                {a.label}
-              </ContextMenuItem>
-            </Fragment>
-          ))
-        ) : (
-          <ActionItems
-            row={row}
-            actions={actions}
-            elapsed={elapsed}
-            rotateBusy={rotateBusy}
-            Item={ContextMenuItem}
-            Separator={ContextMenuSeparator}
-          />
-        )}
+        <ContextMenuGroup>
+          <ActionItems actions={overSelection ? bulk : menu} Item={ContextMenuItem} Separator={ContextMenuSeparator} />
+        </ContextMenuGroup>
       </ContextMenuContent>
     </ContextMenu>
   )

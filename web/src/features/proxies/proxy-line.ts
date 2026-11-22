@@ -11,14 +11,14 @@
    пропускает её через quote, потому что дальше эта строка уходит в curl как
    URL. Для показа её надо раскодировать обратно — иначе в поле правки вместо
    пароля `gjfnix054$` видно `gjfnix054%24`, а поле заведено ровно затем, чтобы
-   сверить пароль посимвольно. Обратно кодировать не надо: строку всё равно
-   перечитает сервер и закодирует сам (modules/proxies._quote_cred, он же
-   бережёт от повторного кодирования уже закодированного). */
+   сверить пароль посимвольно. При сборке кодируем обратно: иначе @, / и #
+   меняют разбор URL; сервер бережёт уже закодированную строку от повторного
+   кодирования (modules/proxies._quote_cred). */
 function decodeCred(value: string): string {
   try {
-    return decodeURIComponent(value)
+    return decodeURIComponent(value.replace(/%(?![0-9a-f]{2})/gi, "%25"))
   } catch {
-    // одинокий «%» в пароле — не escape-последовательность: оставляем как есть
+    // Invalid UTF-8 escapes are left as entered rather than crashing the editor.
     return value
   }
 }
@@ -59,7 +59,9 @@ export function parseProxyLine(line: string): ProxyLineFields | null {
 /** Собрать строку обратно — тот же канонический вид, что читает
     `parseProxyLine`. Сервер её всё равно перепроверит своим разбором. */
 export function buildProxyLine(f: ProxyLineFields): string {
-  const auth = f.login || f.password ? `${f.login}:${f.password}@` : ""
+  // The server's paste parser splits raw apostrophes even inside a URL.
+  const encode = (value: string) => encodeURIComponent(value).replace(/'/g, "%27")
+  const auth = f.login || f.password ? `${encode(f.login)}:${encode(f.password)}@` : ""
   const base = `${f.scheme}://${auth}${f.host}:${f.port}`
   const rotate = f.rotateUrl.trim()
   return rotate ? `${base} ${rotate}` : base
