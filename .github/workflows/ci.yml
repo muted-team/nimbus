@@ -34,6 +34,7 @@ jobs:
           sudo ifconfig lo0 alias 127.0.0.3 up
       - run: python tools/check_public_tree.py
       - run: python tests/run_checks.py
+      - run: python tools/check_http_contract.py
       - run: python tests/check_account_parse.py
       - run: python tests/check_accounts_bulk.py
       - run: python tests/check_config_cache.py

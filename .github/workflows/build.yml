@@ -84,6 +84,7 @@ jobs:
             }
           }
       - run: python tests/run_checks.py
+      - run: python tools/check_http_contract.py
       - run: npm ci
         working-directory: web
       - run: npm run typecheck
