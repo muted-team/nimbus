@@ -15,9 +15,8 @@ const WIDTH = {
 
 export type PageWidth = keyof typeof WIDTH
 
-/* fill — экран ровно в окно: страница не скроллится, прокрутка идёт внутри
-   панелей (списки аккаунтов и журнала, обзор). Высота считается один раз
-   здесь: на телефоне из окна вычитается нижняя навигация и safe-area. */
+/* Прокрутка внутри страницы: WebKitGTK не крутит документ с root overscroll:none.
+   fill оставляет её спискам. На телефоне вычитаем навигацию и safe-area. */
 const FILL = "h-[calc(100svh_-_var(--mobile-nav-h)_-_env(safe-area-inset-bottom))] md:h-svh"
 
 export function Page({
@@ -28,7 +27,7 @@ export function Page({
   return (
     <div
       data-slot="page"
-      className={cn("flex flex-col", fill ? FILL : "min-h-full", className)}
+      className={cn("flex flex-col", FILL, !fill && "overflow-y-auto", className)}
       {...props}
     />
   )

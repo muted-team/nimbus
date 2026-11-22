@@ -11,13 +11,14 @@ import { notify } from "@/lib/notify"
 
 import { SETTINGS_LABEL, SETTINGS_TOAST } from "./labels"
 import { createPhoneQr } from "./phone-qr"
-import { SettingRow, SettingsGroup } from "./settings-row"
+import { SettingRow } from "./settings-row"
+import { ACCESS_TEXT } from "./access-labels"
 
 export function PhonePanel({
   phone,
   password,
 }: Pick<Settings, "phone" | "password">) {
-  useLanguage()
+  const text = ACCESS_TEXT[useLanguage()]
   const [saving, setSaving] = useState(false)
   const [result, setResult] = useState<{
     link: string
@@ -47,7 +48,7 @@ export function PhonePanel({
   const port = link ? new URL(link).port : ""
 
   const toggle = async (on: boolean) => {
-    if (guard.current) return
+    if (guard.current || !password.set || phone.supported === false) return
     guard.current = true
     setSaving(true)
     try {
@@ -61,18 +62,22 @@ export function PhonePanel({
   }
 
   return (
-    <SettingsGroup title={SETTINGS_LABEL.phoneTitle}>
-      <SettingRow label={SETTINGS_LABEL.phone} htmlFor="settings-phone">
+    <>
+      <SettingRow label={text.phone} htmlFor="settings-phone">
         <Switch
           id="settings-phone"
           checked={phone.active}
-          disabled={saving || !password.set}
+          disabled={saving || !password.set || phone.supported === false}
           onCheckedChange={(on) => void toggle(on)}
         />
         <p className="w-full text-xs text-muted-foreground">
-          {password.set
-            ? SETTINGS_LABEL.phoneHint
-            : SETTINGS_LABEL.phoneNeedPassword}
+          {phone.supported === false
+            ? phone.active
+              ? text.phoneBound
+              : text.phoneUnsupported
+            : password.set
+              ? SETTINGS_LABEL.phoneHint
+              : text.needPassword}
         </p>
       </SettingRow>
       {phone.active ? (
@@ -120,6 +125,6 @@ export function PhonePanel({
           </div>
         </div>
       ) : null}
-    </SettingsGroup>
+    </>
   )
 }

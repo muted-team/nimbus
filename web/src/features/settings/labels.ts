@@ -31,6 +31,7 @@ export const SETTINGS_LABEL = localize({
 export const BROWSER_LABEL: Record<BrowserProfile, string> = {
   chrome152: "Chrome 152",
   firefox155: "Firefox 155",
+  camoufox158: "Camoufox 158",
 }
 
 export const ON_DEATH_LABEL: Record<ProxyOnDeath, string> = localize({

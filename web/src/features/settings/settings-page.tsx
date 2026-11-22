@@ -16,8 +16,7 @@ import { notify } from "@/lib/notify"
 
 import { BROWSER_LABEL, ON_DEATH_LABEL, SETTINGS_LABEL } from "./labels"
 import { LanguagePanel } from "./language-panel"
-import { PasswordPanel } from "./password-panel"
-import { PhonePanel } from "./phone-panel"
+import { AccessPanel } from "./access-panel"
 import { ServerPanel } from "./server-panel"
 import { ExecutionPanel } from "./execution-panel"
 import { ThemePanel } from "./theme-panel"
@@ -157,29 +156,17 @@ function SettingsForm({ settings }: { settings: Settings }) {
           />
         </SettingRow>
       </SettingsGroup>
-      <SettingsGroup
-        title={SETTINGS_LABEL.address}
-        meta={
-          <span className="ml-auto text-xs font-normal text-muted-foreground tabular">
-            {SETTINGS_LABEL.now} {settings.bound.host}:{settings.bound.port}
-          </span>
-        }
-      >
-        <SettingRow label={SETTINGS_LABEL.port} htmlFor="settings-port">
-          <NumberInput
-            id="settings-port"
-            className="w-28"
-            value={port.value}
-            onValueChange={port.onChange}
-            onFocus={port.onFocus}
-            onBlur={port.onBlur}
-          />
-        </SettingRow>
-      </SettingsGroup>
+      <AccessPanel
+        settings={settings}
+        portInput={{
+          value: port.value,
+          onValueChange: port.onChange,
+          onFocus: port.onFocus,
+          onBlur: port.onBlur,
+        }}
+      />
       <ServerPanel server={settings.server} />
       <ClientUpdates />
-      {settings.password.available ? <PasswordPanel password={settings.password} /> : null}
-      <PhonePanel phone={settings.phone} password={settings.password} />
     </>
   )
 }

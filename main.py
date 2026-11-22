@@ -18,6 +18,7 @@ from modules.console import configure_console  # noqa: E402
 configure_console()
 
 _MAX_BODY = 4 * 1024 * 1024  # 4 MiB
+_network_settings_lock = threading.RLock()
 # фото в папку-слот приходит сырым телом: лимит свой, крупнее обычного
 _MAX_UPLOAD = 64 * 1024 * 1024  # 64 MiB
 # видео пишется на диск частями, в памяти не держится — потолок только от
@@ -365,7 +366,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def _auth_ok(self) -> bool:
         from modules import auth
-        if hasattr(self.server, "phone_parent") and not auth.enabled():
+        if (hasattr(self.server, "phone_parent")
+                or self._forwarded() or self._client_ip() not in ("127.0.0.1", "::1")) and not auth.enabled():
             return False
         return not auth.enabled() or auth.cookie_ok(self.headers.get("Cookie"))
 
@@ -373,13 +375,17 @@ class Handler(BaseHTTPRequestHandler):
         """Спрашивает ли сервер пароль с этого адреса. С самого компьютера —
         нет: оттуда ходит окно программы, а кто сидит за компьютером, и так
         у себя. С телефона и из сети — по паролю, если сервер его спрашивает
-        (app.py собирает сервер с auth, только когда включён доступ с телефона)."""
-        from modules import auth
-        if hasattr(self.server, "phone_parent"):
+        (app.py собирает любой сетевой вход с auth)."""
+        if hasattr(self.server, "phone_parent") or self._forwarded():
             return True
         if self._client_ip() in ("127.0.0.1", "::1"):
             return False
-        return bool(getattr(self.server, "require_auth", True)) and auth.enabled()
+        return bool(getattr(self.server, "require_auth", True))
+
+    def _forwarded(self) -> bool:
+        # Untrusted forwarding hints can remove local trust, never grant it.
+        return any(name.lower() == "forwarded" or name.lower().startswith("x-forwarded-")
+                   for name in self.headers)
 
     def _foreign(self) -> bool:
         """Запрос пришёл не из окна программы и не с телефона, а с чужой
@@ -792,14 +798,19 @@ class Handler(BaseHTTPRequestHandler):
     def _settings_payload(self, cfg=None) -> dict:
         """Состояние вкладки «Настройки».
 
-        bound — постоянный адрес окна; phone — отдельный вход из сети,
-        включаемый без перезапуска."""
+        bound — активная основная привязка; phone — отдельный вход из сети
+        или уже активная сетевая привязка без отдельного переключателя."""
         from modules import auth, client_device, proxy_pool, remote
         cfg = cfg if cfg is not None else config.load()
-        host, port = self.server.server_address[:2]
+        owner = getattr(self.server, "phone_parent", self.server)
+        host, port = owner.server_address[:2]
         phone_status = (self.server.phone_status() if hasattr(self.server, "phone_status")
                         else {"active": str(host) not in ("127.0.0.1", "::1"),
                               "supported": False, "links": phone_links(int(port))})
+        if str(host) not in ("127.0.0.1", "localhost", "::1"):
+            links = phone_links(int(port)) if str(host) == "0.0.0.0" else [f"http://{host}:{port}"]
+            phone_status = {"active": True, "supported": False, "links": links,
+                            "connected": bool(getattr(owner, "network_connected", False))}
         return {"server": {"url": remote.base(), "default": remote.API_BASE,
                            "custom": bool(cfg.get("server_url"))},
                 "execution_modes": cfg.get("execution_modes", {"login": 0, "publish": 0, "logout": 0}),
@@ -814,6 +825,7 @@ class Handler(BaseHTTPRequestHandler):
                 "server_wait_max": config.SERVER_WAIT_MAX,
                 "port": cfg.get("port"),
                 "host": cfg.get("host"),
+                "bind_explicit": cfg.get("bind_explicit") is True,
                 "bound": {"host": str(host), "port": int(port)},
                 "phone": {"on": bool(cfg.get("phone_access")), **phone_status},
                 "password": {"available": True,
@@ -861,9 +873,32 @@ class Handler(BaseHTTPRequestHandler):
         if not isinstance(body, dict):
             self._json({"error": "ожидается JSON-объект"}, 400)
             return
-        if "password" in body and "phone_access" in body:
-            self._json({"error": "измените пароль и доступ с телефона отдельно"}, 400)
+        if "password" in body and len(body) != 1:
+            self._json({"error": "измените пароль отдельно от других настроек"}, 400)
             return
+        if body.keys() & {"host", "port", "phone_access", "password"}:
+            # Keep the password/network prechecks valid through listener and disk commit.
+            with _network_settings_lock:
+                self._commit_settings(body)
+        else:
+            self._commit_settings(body)
+
+    def _commit_settings(self, body):
+        if "host" in body:
+            import ipaddress
+            from modules import auth
+            host = body["host"]
+            if host in ("localhost", "::1"):
+                host = "127.0.0.1"
+            try:
+                if not isinstance(host, str) or str(ipaddress.IPv4Address(host)) != host:
+                    raise ValueError
+            except (ValueError, TypeError):
+                self._json({"error": "адрес привязки — IPv4 без порта и пути или localhost"}, 400)
+                return
+            if host != "127.0.0.1" and not auth.enabled():
+                self._json({"error": "сначала задайте пароль для доступа с других устройств"}, 400)
+                return
         if "browser_profile" in body:
             from modules import client_device
             if body["browser_profile"] not in client_device.BROWSER_PROFILES:
@@ -908,6 +943,10 @@ class Handler(BaseHTTPRequestHandler):
             patch["browser_profile"] = body["browser_profile"]
         if "phone_access" in body:
             from modules import auth
+            owner = getattr(self.server, "phone_parent", self.server)
+            if str(owner.server_address[0]) not in ("127.0.0.1", "localhost", "::1"):
+                self._json({"error": "сетевая привязка уже активна; для отдельного доступа выберите локальную привязку и перезапустите"}, 409)
+                return
             if not isinstance(body["phone_access"], bool):
                 self._json({"error": "доступ с телефона — включён или выключен"}, 400)
                 return
@@ -940,12 +979,8 @@ class Handler(BaseHTTPRequestHandler):
                 return
             patch["port"] = port
         if "host" in body:
-            host = str(body.get("host") or "").strip()
-            if not host or len(host) > 255 or any(c.isspace() for c in host):
-                self._json({"error": "адрес — непустая строка без пробелов "
-                                     "(0.0.0.0 — слушать на всех интерфейсах)"}, 400)
-                return
             patch["host"] = host
+            patch["bind_explicit"] = True
         # пароль на интерфейс: хэш пишет modules/auth.py, в config.json
         # самого пароля нет. Смена пароля разлогинивает все устройства —
         # тому, кто менял, в ответе уходит новая кука
@@ -958,6 +993,14 @@ class Handler(BaseHTTPRequestHandler):
                             if hasattr(self.server, "phone_status") else False)
             if config.get("phone_access") or phone_active:
                 self._json({"error": "сначала выключите «С телефона»"}, 400)
+                return
+            local_hosts = ("127.0.0.1", "localhost", "::1")
+            saved_host = (config.get("host") or "127.0.0.1"
+                          if config.get("bind_explicit") is True else "127.0.0.1")
+            active_host = getattr(self.server, "phone_parent", self.server).server_address[0]
+            if (saved_host not in local_hosts or patch.get("host", saved_host) not in local_hosts
+                    or str(active_host) not in local_hosts):
+                self._json({"error": "сначала выберите локальную привязку и перезапустите сервер"}, 400)
                 return
             try:
                 auth.clear_password()
@@ -2589,6 +2632,8 @@ class _QuietThreadingHTTPServer(ThreadingHTTPServer):
         request, address = super().get_request()
         if hasattr(self, "phone_parent"):
             self.phone_connected = True
+        elif address[0] not in ("127.0.0.1", "::1"):
+            self.network_connected = True
         return request, address
 
     def handle_error(self, request, client_address):

@@ -3,6 +3,9 @@ import builtins
 import importlib.util
 import os
 import socket
+import json
+import http.client
+import tempfile
 from pathlib import Path
 import sys
 import types
@@ -130,7 +133,11 @@ class LifecycleTests(unittest.TestCase):
         server.build_server = Mock(return_value=self.httpd)
         auth = types.ModuleType("modules.auth")
         auth.enabled = Mock(return_value=False)
+        self.server_mod = server
+        self.auth = auth
         self.stack.enter_context(patch.dict(sys.modules, {"main": server, "modules.auth": auth}))
+        import modules
+        self.stack.enter_context(patch.object(modules, 'auth', auth, create=True))
         self.stack.enter_context(patch.object(sys, "argv", ["app.py"]))
         self.stack.enter_context(patch.object(sys, "platform", "linux"))
         for name in ("_carry_over", "_log"):
@@ -279,6 +286,156 @@ class LifecycleTests(unittest.TestCase):
         with self.assertRaises(KeyboardInterrupt):
             self.app.main()
         self.assert_closed_once()
+
+    def test_legacy_wildcard_default_does_not_expose_native_app_after_password_is_set(self):
+        self.server_mod.config['host'] = '0.0.0.0'
+        self.auth.enabled.return_value = True
+        self.app.webview.create_window.side_effect = None
+        self.assertEqual(self.app.main(), 0)
+        self.server_mod.build_server.assert_called_once_with(8740, '127.0.0.1', auth=True)
+
+    def test_fresh_default_wildcard_stays_on_loopback_without_password(self):
+        self.server_mod.config.update(host='0.0.0.0', phone_access=False)
+        self.app.webview.create_window.side_effect = None
+        self.assertEqual(self.app.main(), 0)
+        self.server_mod.build_server.assert_called_once_with(8740, '127.0.0.1', auth=True)
+        self.httpd.set_phone_access.assert_not_called()
+
+    def test_explicit_wildcard_bind_is_applied_and_window_stays_on_loopback(self):
+        self.server_mod.config.update(host='0.0.0.0', bind_explicit=True, phone_access=True)
+        self.auth.enabled.return_value = True
+        self.httpd.server_address = ('0.0.0.0', 8740)
+        self.app.webview.create_window.side_effect = None
+        self.assertEqual(self.app.main(), 0)
+        self.server_mod.build_server.assert_called_once_with(8740, '0.0.0.0', auth=True)
+        self.httpd.set_phone_access.assert_not_called()
+        self.assertEqual(self.app.webview.create_window.call_args.args[1], 'http://127.0.0.1:8740')
+
+    def test_explicit_remote_bind_without_password_is_refused_before_any_listener(self):
+        self.server_mod.config.update(host='0.0.0.0', bind_explicit=True)
+        self.app.webview.create_window.side_effect = None
+        with patch.object(self.app, '_fatal_messagebox') as message:
+            self.assertEqual(self.app.main(), 1)
+        self.server_mod.build_server.assert_not_called()
+        self.app.webview.create_window.assert_not_called()
+        message.assert_called_once()
+
+    def test_explicit_local_bind_keeps_separate_password_protected_phone_listener(self):
+        self.server_mod.config.update(host='127.0.0.1', bind_explicit=True, phone_access=True)
+        self.auth.enabled.return_value = True
+        self.app.webview.create_window.side_effect = None
+        self.assertEqual(self.app.main(), 0)
+        self.server_mod.build_server.assert_called_once_with(8740, '127.0.0.1', auth=True)
+        self.httpd.set_phone_access.assert_called_once_with(True)
+
+    def test_explicit_localhost_is_normalized_to_reachable_loopback_without_password(self):
+        self.server_mod.config.update(host='localhost', bind_explicit=True)
+        self.app.webview.create_window.side_effect = None
+        self.assertEqual(self.app.main(), 0)
+        self.server_mod.build_server.assert_called_once_with(8740, '127.0.0.1', auth=True)
+
+    def test_explicit_specific_network_address_opens_the_window_on_the_actual_listener(self):
+        self.server_mod.config.update(host='192.168.1.5', bind_explicit=True)
+        self.auth.enabled.return_value = True
+        self.httpd.server_address = ('192.168.1.5', 8740)
+        self.app.webview.create_window.side_effect = None
+        self.assertEqual(self.app.main(), 0)
+        self.server_mod.build_server.assert_called_once_with(8740, '192.168.1.5', auth=True)
+        self.assertEqual(self.app.webview.create_window.call_args.args[1], 'http://192.168.1.5:8740')
+
+    def test_invalid_ipv4_startup_bind_is_refused_before_port_probe_or_server(self):
+        self.auth.enabled.return_value = True
+        for host in ('::', '2001:db8::1', 'http://127.0.0.1', '192.168.001.5', '127.1'):
+            with self.subTest(host=host), patch.object(self.app, '_fatal_messagebox') as message:
+                self.server_mod.config.update(host=host, bind_explicit=True)
+                self.assertEqual(self.app.main(), 1)
+                message.assert_called_once()
+        self.server_mod.build_server.assert_not_called()
+        self.app._port_free.assert_not_called()
+
+    def test_occupied_highest_port_never_probes_outside_tcp_port_range(self):
+        self.server_mod.config['port'] = 65535
+        def occupied(port, host):
+            self.assertLessEqual(port, 65535, 'Startup attempted an invalid TCP port')
+            return False
+        self.app._port_free.side_effect = occupied
+        with patch.object(self.app, '_fatal_messagebox') as message:
+            self.assertEqual(self.app.main(), 1)
+        self.app._port_free.assert_called_once_with(65535, '127.0.0.1')
+        self.server_mod.build_server.assert_not_called()
+        self.assertNotIn('65554', message.call_args.args[0])
+
+    def test_busy_penultimate_port_can_use_the_last_valid_port(self):
+        self.server_mod.config['port'] = 65534
+        self.app._port_free.side_effect = lambda port, host: port == 65535
+        self.httpd.server_address = ('127.0.0.1', 65535)
+        self.app.webview.create_window.side_effect = None
+        self.assertEqual(self.app.main(), 0)
+        self.server_mod.build_server.assert_called_once_with(65535, '127.0.0.1', auth=True)
+
+    def test_out_of_range_configured_port_is_refused_before_socket_probe(self):
+        self.server_mod.config['port'] = 65536
+        with patch.object(self.app, '_fatal_messagebox') as message:
+            self.assertEqual(self.app.main(), 1)
+            message.assert_called_once()
+        self.app._port_free.assert_not_called()
+
+
+class NetworkStartupHttpTests(unittest.TestCase):
+    def test_explicit_wildcard_startup_uses_real_socket_and_password_gated_api(self):
+        from modules import config, auth
+        from tests.test_phone_access import server_class, application_handler
+        app = load_app()
+        with tempfile.TemporaryDirectory() as tmp, patch.object(config, 'CONFIG_FILE', Path(tmp) / 'config.json'):
+            config.write_text_atomic(config.CONFIG_FILE,
+                                     '{"host":"0.0.0.0","bind_explicit":true,"port":8740,"phone_access":true}')
+            auth.set_password('synthetic-startup-password')
+            backend = types.ModuleType('main')
+            backend.config = config
+            servers = []
+            def build(port, host, auth=True):
+                self.assertEqual(host, '0.0.0.0')
+                instance = server_class()((host, 0), application_handler())
+                instance.require_auth = auth
+                instance.daemon_threads = True
+                servers.append(instance)
+                return instance
+            backend.build_server = build
+            def request(source='127.0.0.1', path='/api/settings', method='GET', body=None, cookie=None):
+                connection = http.client.HTTPConnection('127.0.0.1', servers[0].server_port,
+                                                       source_address=(source, 0), timeout=3)
+                headers = {'Content-Type': 'application/json'}
+                if cookie: headers['Cookie'] = cookie
+                connection.request(method, path, json.dumps(body) if body is not None else None, headers)
+                response = connection.getresponse()
+                result = response.status, json.loads(response.read()), response.getheader('Set-Cookie')
+                connection.close()
+                return result
+            def native_start(**kwargs):
+                status, settings, _ = request()
+                self.assertEqual(status, 200)
+                self.assertEqual(settings['bound']['host'], '0.0.0.0')
+                self.assertTrue(settings['phone']['active'])
+                self.assertFalse(settings['phone']['supported'])
+                self.assertIs(settings['phone'].get('connected'), False)
+                self.assertEqual(servers[0]._phone_servers, [])
+                self.assertEqual(request('127.0.0.2')[0], 401)
+                status, _, cookie = request('127.0.0.2', '/api/auth', 'POST', {'password': 'synthetic-startup-password'})
+                self.assertEqual(status, 200)
+                self.assertEqual(request('127.0.0.2', cookie=cookie)[0], 200)
+                self.assertIs(request()[1]['phone'].get('connected'), True)
+                auth.clear_password()
+                self.assertEqual(request('127.0.0.2', cookie=cookie)[0], 401)
+            app.webview.create_window = Mock()
+            app.webview.start = native_start
+            with (patch.dict(sys.modules, {'main': backend}), patch.object(sys, 'argv', ['app.py']),
+                  patch.object(app, '_carry_over'), patch.object(app, '_log'),
+                  patch.object(app, '_browser_fallback', side_effect=AssertionError('Unexpected fallback in headless test')),
+                  patch.object(app, '_fatal_messagebox', side_effect=AssertionError('Unexpected native dialog in headless test')),
+                  patch.object(app, '_port_free', return_value=True), patch.object(app, '_webview2_missing', return_value=False)):
+                self.assertEqual(app.main(), 0)
+            self.assertEqual(app.webview.create_window.call_args.args[1], f'http://127.0.0.1:{servers[0].server_port}')
+            self.assertEqual(servers[0].fileno(), -1)
 
 
 if __name__ == "__main__":

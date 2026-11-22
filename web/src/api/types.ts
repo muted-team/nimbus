@@ -335,8 +335,10 @@ export interface Settings {
   server_wait_max: number
   port: number
   host: string
+  /** true only after the user explicitly saves a bind address */
+  bind_explicit?: boolean
   bound: { host: string; port: number }
-  /** отдельный вход из локальной сети; включается без перезапуска окна */
+  /** active network access; supported means the separate LAN listener can toggle live */
   phone: { on: boolean; active: boolean; supported?: boolean; connected?: boolean; links: string[] }
   password: { available: boolean; set: boolean; min_len: number; required?: boolean }
 }

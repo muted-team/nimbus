@@ -537,22 +537,40 @@ def main() -> int:
     port = int(sys.argv[1]) if len(sys.argv) > 1 else None
     base_port = port if port is not None else int(
         server_mod.config.get("port") or 8740)
+    if not 1 <= base_port <= 65535:
+        _fatal_messagebox("Порт — целое число от 1 до 65535.")
+        return 1
+    last_port = min(65535, base_port + _PORT_TRIES - 1)
 
-    # По умолчанию слушаем только этот компьютер (аудит: не светить API
-    # наружу). С доступом с телефона — всю сеть, но с чужих адресов только по
-    # паролю; без пароля доступ не включается, даже если его вписали в
-    # config.json руками. port..port+20: доступность проверяем пробой сокета
+    # По умолчанию — только этот компьютер. Сеть — после явного выбора привязки
+    # и только с паролем; локальный вход с телефона включается отдельно.
+    # port..port+20: доступность проверяем пробой сокета
     # (см. _port_free) — build_server с SO_REUSEADDR на Windows занятость не ловит.
     from modules import auth
     phone = bool(server_mod.config.get("phone_access")) and auth.enabled()
-    host = "127.0.0.1"
+    # Старые config содержат wildcard по умолчанию; он не был выбором пользователя.
+    host = (str(server_mod.config.get("host") or "127.0.0.1")
+            if server_mod.config.get("bind_explicit") is True else "127.0.0.1")
+    if host in ("localhost", "::1"):
+        host = "127.0.0.1"
+    import ipaddress
+    try:
+        if str(ipaddress.IPv4Address(host)) != host:
+            raise ValueError
+    except ValueError:
+        _fatal_messagebox("Адрес привязки — IPv4 без порта и пути или localhost.")
+        return 1
+    if host not in ("127.0.0.1", "localhost", "::1") and not auth.enabled():
+        _fatal_messagebox("Доступ с других устройств требует пароля. "
+                          "Выберите локальную привязку 127.0.0.1 или задайте пароль.")
+        return 1
     httpd = None
-    for offset in range(_PORT_TRIES):
+    for offset in range(last_port - base_port + 1):
         if not _port_free(base_port + offset, host):
             continue
         try:
             httpd = server_mod.build_server(base_port + offset, host, auth=True)
-            if phone:
+            if phone and host in ("127.0.0.1", "localhost", "::1"):
                 httpd.set_phone_access(True)
             break
         except OSError:
@@ -563,13 +581,14 @@ def main() -> int:
     if httpd is None:
         _fatal_messagebox(
             f"Не удалось запустить локальный сервер: порты "
-            f"{base_port}–{base_port + _PORT_TRIES - 1} заняты. "
+            f"{base_port}–{last_port} заняты. "
             f"Закройте другие копии приложения (или освободите порт) "
             f"и попробуйте снова.")
         return 1
 
-    _, actual_port = httpd.server_address
-    url = f"http://127.0.0.1:{actual_port}"
+    bound_host, actual_port = httpd.server_address
+    window_host = "127.0.0.1" if bound_host == "0.0.0.0" else bound_host
+    url = f"http://{window_host}:{actual_port}"
     if actual_port != base_port:
         print(f"[app] порт {base_port} занят — сервер на {actual_port}", file=sys.stderr)
 
