@@ -12,7 +12,7 @@ import { remainingLineDraft } from "@/lib/line-draft"
 import { notify } from "@/lib/notify"
 
 import { NOSHADOW_LABEL, PROXIES_TOAST, PROXY_ADD_LABEL } from "./labels"
-import { saveProxiesLines } from "./proxies-store"
+import { mutateProxies, saveProxiesLines, useProxiesStore } from "./proxies-store"
 
 /* Добавление пачкой: вставленные строки дописываются к тому, что уже на
    сервере, и уходят одним PUT (другого способа дописать список нет —
@@ -45,6 +45,7 @@ export function ProxyAddPanel({
   const [adding, setAdding] = useState(false)
   const current = useRef("")
   const inFlight = useRef(false)
+  const mutating = useProxiesStore((s) => s.mutating)
 
   const submit = async () => {
     const sent = current.current
@@ -54,7 +55,7 @@ export function ProxyAddPanel({
     try {
       const offset = proxies.length
       // Не убираем пустые строки до запроса: номера ошибок относятся к вводу.
-      const res = await saveProxiesLines([...proxies, sent], { login, publish, registration, off })
+      const res = await mutateProxies(proxies, () => saveProxiesLines([...proxies, sent], { login, publish, registration, off }))
       if (!res) return
       const errs = (res.errors ?? [])
         .filter((e) => e.line > offset)
@@ -110,7 +111,7 @@ export function ProxyAddPanel({
             <GlobeIcon data-icon="inline-start" />
             {NOSHADOW_LABEL.open}
           </Button>
-          <Button onClick={() => void submit()} disabled={adding || !text.trim()}>
+          <Button onClick={() => void submit()} disabled={adding || mutating || !text.trim()}>
             {adding ? <Spinner data-icon="inline-start" /> : null}
             {adding ? PROXY_ADD_LABEL.adding : PROXY_ADD_LABEL.add}
           </Button>

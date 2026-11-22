@@ -18,7 +18,7 @@ vi.mock("@/components/ui/button", async (original) => {
     return createElement(real.Button, props)
   } }
 })
-vi.mock("./proxies-store", () => ({ saveProxiesLines: vi.fn() }))
+vi.mock("./proxies-store", async (original) => ({ ...await original<typeof import("./proxies-store")>(), saveProxiesLines: vi.fn() }))
 vi.mock("@/lib/notify", () => ({ notify: { ok: vi.fn(), warn: vi.fn(), error: vi.fn() } }))
 
 // Only remove the portal: render the real form controls and their saved values.

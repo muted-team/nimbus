@@ -50,3 +50,13 @@ it("keeps the same disabled IP actions in both menus of a disabled proxy", () =>
   expect(buttons(menus[0][1])).toEqual(buttons(menus[1][1]))
   expect(buttons(menus[0][1]).filter((button) => button.disabled)).toHaveLength(2)
 })
+
+it("disables all assignment switches while a list mutation is pending", () => {
+  const html = renderToStaticMarkup(createElement(ProxyTableRow, {
+    row, rotateBusy: false, actions: { ...actions, locked: true },
+    selected: false, onPick: vi.fn(), selectionCount: 0, bulk: [],
+  }))
+  const switches = [...html.matchAll(/<[^>]+data-slot="switch"[^>]*>/g)].map(([tag]) => tag)
+  expect(switches).toHaveLength(3)
+  for (const control of switches) expect(control).toMatch(/\sdata-disabled(?:=""|\s|$)/)
+})

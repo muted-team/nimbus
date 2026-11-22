@@ -19,7 +19,7 @@ import { notify } from "@/lib/notify"
 
 import { PROXIES_TOAST, PROXY_EDIT_LABEL } from "./labels"
 import { buildProxyLine, parseProxyLine, type ProxyLineFields } from "./proxy-line"
-import { saveProxiesLines } from "./proxies-store"
+import { mutateProxies, saveProxiesLines, useProxiesStore } from "./proxies-store"
 
 /* Правка одной строки — по отдельным полям, не одной текстовой строкой:
    протокол выбором из списка, хост, порт, логин, пароль (как есть, посимвольно
@@ -76,6 +76,7 @@ export function ProxyEditPanel({
   const [raw, setRaw] = useState(line)
   const [fields, setFields] = useState<ProxyLineFields>(parsed ?? EMPTY_FIELDS)
   const [saving, setSaving] = useState(false)
+  const mutating = useProxiesStore((s) => s.mutating)
 
   const set = (key: keyof ProxyLineFields) => (v: string) => setFields((f) => ({ ...f, [key]: v }))
 
@@ -89,7 +90,8 @@ export function ProxyEditPanel({
     try {
       const next = [...proxies]
       next[index] = value.trim()
-      const res = await saveProxiesLines(next, { login, publish, registration, off })
+      const res = await mutateProxies(proxies, () => saveProxiesLines(next, { login, publish, registration, off }))
+      if (!res) return
       const error = res?.errors?.[0]?.error
       if (error) {
         notify.warn(sentence(error))
@@ -204,7 +206,7 @@ export function ProxyEditPanel({
           <Button variant="outline" onClick={onClose} disabled={saving}>
             {PROXY_EDIT_LABEL.cancel}
           </Button>
-          <Button onClick={() => void save()} disabled={saving || empty || missingParts}>
+          <Button onClick={() => void save()} disabled={saving || mutating || empty || missingParts}>
             {saving ? PROXY_EDIT_LABEL.saving : PROXY_EDIT_LABEL.save}
           </Button>
         </SheetFooter>

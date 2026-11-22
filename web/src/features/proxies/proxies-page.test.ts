@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process"
 import { createElement, Fragment, type PropsWithChildren } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
 import { beforeEach, expect, it, vi } from "vitest"
@@ -7,6 +8,7 @@ import type { ProxyRowActions } from "./proxy-row"
 
 const fixture = vi.hoisted(() => ({
   actions: [] as BarAction[], busy: new Set<number>(), menu: null as ProxyRowActions["menu"] | null,
+  rowActions: null as ProxyRowActions | null,
   data: {
     enabled: true, rotating: 2, errors: [],
     proxies: ["http://one.invalid:8080", "http://two.invalid:8080", "http://hidden.invalid:8080"],
@@ -49,6 +51,7 @@ vi.mock("@/components/selection-bar", () => ({
 }))
 vi.mock("./proxies-table", () => ({ ProxiesTable: ({ actions }: { actions: ProxyRowActions }) => {
   fixture.menu = actions.menu
+  fixture.rowActions = actions
   return null
 } }))
 vi.mock("./proxy-capacity", () => ({ ProxyCapacity: () => null }))
@@ -62,10 +65,14 @@ import { notify } from "@/lib/notify"
 import { confirmDestructive } from "@/components/confirm"
 import { toProxyRows } from "./filter"
 import { PROXIES_TOAST } from "./labels"
+import { useProxiesStore } from "./proxies-store"
+import { keys, queryClient } from "@/api/query-client"
 import ProxiesPage from "./proxies-page"
 
 beforeEach(() => {
   vi.clearAllMocks()
+  useProxiesStore.setState({ mutating: false })
+  queryClient.clear()
   fixture.busy = new Set()
   fixture.data = {
     enabled: true, rotating: 2, errors: [],
@@ -259,4 +266,153 @@ with tempfile.TemporaryDirectory(dir="web/src/features/proxies") as directory:
   fixture.menu!(toProxyRows(fixture.data.health, fixture.data.proxies).slice(0, 1)).find((a) => a.key === "renew")!.onClick()
   await vi.waitFor(() => expect(notify.warn).toHaveBeenCalledTimes(1))
   expect(notify.ok).not.toHaveBeenCalled()
+})
+
+// Real PUT/index mapping with isolated synthetic config; no application server or network.
+function applyProxyPut(body: unknown, config: Record<string, unknown>) {
+  const python = spawnSync(process.env.PYTHON || (process.platform === "win32" ? "python" : "python3"), ["-c", String.raw`
+import json, socket, sys, tempfile
+from pathlib import Path
+from unittest.mock import patch
+import main
+from modules import config, paths, proxy_pool
+payload = json.load(sys.stdin)
+with tempfile.TemporaryDirectory(dir="web/src/features/proxies") as directory:
+    with paths.use_root(Path(directory).resolve()), patch.object(proxy_pool, "_ensure_auto_check"), patch.object(proxy_pool, "_pulse"), patch.object(socket.socket, "connect", side_effect=AssertionError("external requests forbidden")):
+        config.save(payload["config"])
+        handler = main.Handler.__new__(main.Handler)
+        handler._read_json = lambda: (payload["body"], None)
+        handler._campaign_running = lambda: False
+        replies = []
+        handler._json = lambda value, *args: replies.append(value)
+        handler._api_proxies_put()
+        print(json.dumps({"response": replies[0], "config": config.load()}))
+`], { cwd: new URL("../../../../", import.meta.url), env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1", NIMBUS_DATA_ROOT: "" },
+    input: JSON.stringify({ body, config }), encoding: "utf8" })
+  expect(python.status, python.stderr).toBe(0)
+  return JSON.parse(python.stdout) as { response: ProxiesResponse; config: Record<string, unknown> }
+}
+
+it.each(["renew", "checkbox mark"])("refuses %s during deferred deletion, then applies it to the current B/C rather than A/D", async (action) => {
+  const proxies = [
+    "http://a.invalid:8080",
+    "http://fixture-country-US-session-ab12-time-45:synthetic@proxy.noshadow.pro:6969",
+    "http://c.invalid:8080", "http://d.invalid:8080",
+  ]
+  let persisted = { proxies, proxy_enabled: true, proxies_login: [proxies[1]],
+    proxies_publish: [proxies[2]], proxies_registration: [], proxies_off: [] } as Record<string, unknown>
+  fixture.data = applyProxyPut({ enabled: true }, persisted).response
+  queryClient.setQueryData(keys.proxies, fixture.data)
+  renderToStaticMarkup(createElement(ProxiesPage))
+  const rows = toProxyRows(fixture.data.health, fixture.data.proxies)
+  const removeA = fixture.menu!([rows[0]]).find((a) => a.key === "remove")!
+  const renewB = fixture.menu!([rows[1]]).find((a) => a.key === "renew")!
+  const oldCheckbox = fixture.rowActions!.toggleRegistration
+  const pending: { done: boolean; finish: () => void }[] = []
+  vi.mocked(saveProxies).mockImplementation((body) => new Promise((resolve) => {
+    const request = { done: false, finish: () => {
+      if (request.done) return
+      request.done = true
+      const applied = applyProxyPut(body, persisted)
+      persisted = applied.config
+      fixture.data = applied.response
+      queryClient.setQueryData(keys.proxies, fixture.data)
+      resolve(applied.response)
+    } }
+    pending.push(request)
+  }))
+  try {
+    removeA.onClick()
+    await vi.waitFor(() => expect(saveProxies).toHaveBeenCalledTimes(1))
+    if (action === "renew") renewB.onClick()
+    else oldCheckbox(2, true)
+    pending[0].finish()
+    await Promise.resolve()
+    await Promise.resolve()
+    for (const request of pending.slice(1)) request.finish()
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(persisted.proxies).toEqual(proxies.slice(1))
+    expect(persisted.proxies_registration).toEqual([])
+    expect(saveProxies).toHaveBeenCalledTimes(1)
+    await vi.waitFor(() => expect(notify.ok).toHaveBeenCalledExactlyOnceWith(PROXIES_TOAST.deletedMany(1)))
+    if (action === "renew") renewB.onClick()
+    else oldCheckbox(2, true)
+    expect(saveProxies).toHaveBeenCalledTimes(1)
+
+    renderToStaticMarkup(createElement(ProxiesPage))
+    if (action === "renew") {
+      fixture.menu!(toProxyRows(fixture.data.health, fixture.data.proxies).slice(0, 1)).find((a) => a.key === "renew")!.onClick()
+    } else fixture.rowActions!.toggleRegistration(1, true)
+    expect(saveProxies).toHaveBeenCalledTimes(2)
+    pending[1].finish()
+    await Promise.resolve()
+    await Promise.resolve()
+    if (action === "renew") {
+      const saved = persisted.proxies as string[]
+      expect(saved).toHaveLength(3)
+      expect(saved[0]).not.toContain("session-ab12")
+      expect(saved[0]).toContain("country-US")
+      expect(saved.slice(1)).toEqual(proxies.slice(2))
+      expect(saved).not.toContain(proxies[0])
+      await vi.waitFor(() => expect(notify.ok).toHaveBeenCalledTimes(2))
+    } else {
+      expect(persisted.proxies_registration).toEqual([proxies[2]])
+      expect(persisted.proxies_registration).not.toContain(proxies[3])
+      expect(notify.ok).toHaveBeenCalledTimes(1)
+    }
+  } finally {
+    for (const request of pending) request.finish()
+    await Promise.resolve()
+    await Promise.resolve()
+  }
+})
+
+it.each(["renew", "checkbox mark"])("holds the same interlock when %s starts before deletion", async (action) => {
+  const proxies = ["http://a.invalid:8080", "http://fixture-country-US-session-ab12-time-45:synthetic@proxy.noshadow.pro:6969", "http://c.invalid:8080"]
+  fixture.data = { enabled: true, rotating: 0, errors: [], proxies,
+    health: proxies.map((proxy) => ({ proxy, state: "ok" })) }
+  renderToStaticMarkup(createElement(ProxiesPage))
+  const rows = toProxyRows(fixture.data.health, proxies)
+  const removeA = fixture.menu!([rows[0]]).find((a) => a.key === "remove")!
+  let finish!: () => void
+  vi.mocked(saveProxies).mockImplementationOnce(() => new Promise((resolve) => { finish = () => resolve(fixture.data) }))
+  if (action === "renew") fixture.menu!([rows[1]]).find((a) => a.key === "renew")!.onClick()
+  else fixture.rowActions!.toggleRegistration(2, true)
+  removeA.onClick()
+  expect(saveProxies).toHaveBeenCalledTimes(1)
+  expect(confirmDestructive).not.toHaveBeenCalled()
+  finish()
+  await vi.waitFor(() => expect(useProxiesStore.getState().mutating).toBe(false))
+  removeA.onClick()
+  await vi.waitFor(() => expect(saveProxies).toHaveBeenCalledTimes(2))
+})
+
+it("rechecks the captured list after deferred deletion confirmation", async () => {
+  queryClient.setQueryData(keys.proxies, fixture.data)
+  let confirm!: (ok: boolean) => void
+  vi.mocked(confirmDestructive).mockImplementationOnce(() => new Promise((resolve) => { confirm = resolve }))
+  fixture.actions.find((a) => a.key === "remove")!.onClick()
+  const newer = { ...fixture.data, proxies: fixture.data.proxies.slice(1), health: fixture.data.health.slice(1) }
+  queryClient.setQueryData(keys.proxies, newer)
+  confirm(true)
+  await vi.waitFor(() => expect(useProxiesStore.getState().mutating).toBe(false))
+  expect(saveProxies).not.toHaveBeenCalled()
+  expect(notify.ok).not.toHaveBeenCalled()
+})
+
+it("refuses every role and enable/disable writer during another pending mutation", async () => {
+  let finish!: () => void
+  vi.mocked(saveProxies).mockImplementationOnce(() => new Promise((resolve) => { finish = () => resolve(fixture.data) }))
+  fixture.actions.find((a) => a.key === "disable")!.onClick()
+  for (const action of fixture.actions.filter((a) => /(?:login|publish|registration)-(?:on|off)$/.test(a.key))) action.onClick()
+  fixture.rowActions!.toggleLogin(1, true)
+  fixture.rowActions!.togglePublish(1, true)
+  fixture.rowActions!.toggleRegistration(1, true)
+  fixture.menu!(toProxyRows(fixture.data.health, fixture.data.proxies).map((r) => ({ ...r, enabled: false }))).find((a) => a.key === "enable")!.onClick()
+  expect(saveProxies).toHaveBeenCalledTimes(1)
+  expect(notify.ok).not.toHaveBeenCalled()
+  finish()
+  await vi.waitFor(() => expect(useProxiesStore.getState().mutating).toBe(false))
+  expect(notify.ok).toHaveBeenCalledTimes(1)
 })

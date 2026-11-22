@@ -55,6 +55,7 @@ const DOT_TONE: Record<ProxyRow["state"], Tone> = {
 const TD = "px-3 py-2"
 
 export interface ProxyRowActions {
+  locked?: boolean
   menu: (rows: ProxyRow[]) => BarAction[]
   toggleLogin: (index: number, checked: boolean) => void
   togglePublish: (index: number, checked: boolean) => void
@@ -227,7 +228,7 @@ export function ProxyTableRow({
             <Switch
               size="sm"
               checked={!!row.login}
-              disabled={!enabled}
+              disabled={!enabled || actions.locked}
               onCheckedChange={(checked) => actions.toggleLogin(row.index, checked)}
               aria-label={t("Вход: {0}", [row.proxy])}
             />
@@ -238,7 +239,7 @@ export function ProxyTableRow({
             <Switch
               size="sm"
               checked={!!row.publish}
-              disabled={!enabled}
+              disabled={!enabled || actions.locked}
               onCheckedChange={(checked) => actions.togglePublish(row.index, checked)}
               aria-label={t("Публикация: {0}", [row.proxy])}
             />
@@ -249,7 +250,7 @@ export function ProxyTableRow({
             <Switch
               size="sm"
               checked={!!row.registration}
-              disabled={!enabled}
+              disabled={!enabled || actions.locked}
               onCheckedChange={(checked) => actions.toggleRegistration(row.index, checked)}
               aria-label={t("Регистрация: {0}", [row.proxy])}
             />

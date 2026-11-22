@@ -1,6 +1,7 @@
 import { create } from "zustand"
 
 import { checkProxies, saveProxies } from "@/api/proxies"
+import { keys, queryClient } from "@/api/query-client"
 import type { ProxiesResponse } from "@/api/types"
 import { notify } from "@/lib/notify"
 
@@ -24,12 +25,31 @@ interface ProxiesStore {
   checking: boolean
   /** когда раздел сам звал проверку, мс эпохи; null — ещё не звал */
   autoCheckedAt: number | null
+  /** A list/index write or its confirmation is in flight. */
+  mutating: boolean
 }
 
 export const useProxiesStore = create<ProxiesStore>(() => ({
   checking: false,
   autoCheckedAt: null,
+  mutating: false,
 }))
+
+export function proxyListCurrent(lines: readonly string[]): boolean {
+  const current = queryClient.getQueryData<ProxiesResponse>(keys.proxies)?.proxies
+  return !current || (current.length === lines.length && current.every((line, i) => line === lines[i]))
+}
+
+/** All proxy writers share one synchronous guard; stale forms must not restore an old list. */
+export async function mutateProxies<T>(lines: readonly string[], work: () => Promise<T>): Promise<T | null> {
+  if (useProxiesStore.getState().mutating || !proxyListCurrent(lines)) return null
+  useProxiesStore.setState({ mutating: true })
+  try {
+    return await work()
+  } finally {
+    useProxiesStore.setState({ mutating: false })
+  }
+}
 
 /** Текст, который уйдёт на сервер, или null — сохранять не нужно вовсе.
     Пустой список превращается в текст только когда его прислало явное

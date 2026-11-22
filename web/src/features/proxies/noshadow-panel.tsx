@@ -37,7 +37,7 @@ import {
   type NoshadowPatch,
   type Transport,
 } from "./noshadow"
-import { saveProxiesLines } from "./proxies-store"
+import { mutateProxies, saveProxiesLines, useProxiesStore } from "./proxies-store"
 
 /* Прокси noshadow одной боковой панелью на два случая:
 
@@ -103,6 +103,7 @@ export function NoshadowPanel({
   const [perCountry, setPerCountry] = useState("1")
   const [renew, setRenew] = useState(false)
   const [saving, setSaving] = useState(false)
+  const mutating = useProxiesStore((s) => s.mutating)
 
   const mins = Math.min(MAX_MINUTES, Math.max(1, Number(minutes) || DEFAULT_MINUTES))
   const per = Math.min(100, Math.max(1, Number(perCountry) || 1))
@@ -131,7 +132,8 @@ export function NoshadowPanel({
     }
     setSaving(true)
     try {
-      const res = await saveProxiesLines(next, marks)
+      const res = await mutateProxies(proxies, () => saveProxiesLines(next, marks))
+      if (!res) return
       const error = res?.errors?.[0]?.error
       if (error) {
         notify.warn(sentence(error))
@@ -266,7 +268,7 @@ export function NoshadowPanel({
           <Button variant="outline" onClick={onClose} disabled={saving}>
             {L.cancel}
           </Button>
-          <Button onClick={submit} disabled={saving || !ready}>
+          <Button onClick={submit} disabled={saving || mutating || !ready}>
             {edit ? L.apply : L.generate}
           </Button>
         </SheetFooter>
