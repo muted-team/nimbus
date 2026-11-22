@@ -269,6 +269,7 @@ def _call(username: str, path: str, body: dict, timeout=LONG) -> dict:
         if not isinstance(out, dict):
             raise remote.RemoteError("сервер вернул ответ неверного формата",
                                      stop_account=protected, outcome_unknown=protected)
+        _generation_current(state_file(username), generation)
         checked = out.get("data")
         if (path.rstrip("/").endswith("/session/check") and isinstance(checked, dict)
                 and checked.get("alive") is True and not _session_uid_valid(checked.get("uid"))):

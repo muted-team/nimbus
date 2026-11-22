@@ -49,7 +49,7 @@ class ProfileUIDConflict(ProfileIdentityError):
 
 IDENTITY_CONFLICT = ("Вход подтверждён, но UID сессии не совпадает с сохранённым профилем. "
                      "Обработка аккаунта остановлена; прежние данные сохранены.")
-_identity_conflicts = set()  # Keep the stop even if SQLite cannot persist its marker.
+_identity_conflicts = {}  # Keep a per-conflict token even if SQLite cannot persist its marker.
 
 
 class ProfileNetworkError(ProfileError):
@@ -201,7 +201,8 @@ def save_identity(username: str, identity: dict) -> None:
 
 
 def mark_identity_conflict(username: str) -> None:
-    _identity_conflicts.add((paths.here(db.DB_FILE), username))
+    with _lock:
+        _identity_conflicts[(paths.here(db.DB_FILE), username)] = object()
     try:
         with closing(db.connect()) as conn:
             conn.execute("UPDATE profiles SET method = 'identity_conflict' WHERE username = ?", (username,))
@@ -219,9 +220,18 @@ def identity_conflict(username: str) -> bool:
     return bool(row and row[0] == "identity_conflict")
 
 
-def forget_identity_conflict(username: str) -> None:
+def identity_conflict_marker(username: str):
+    with _lock:
+        return _identity_conflicts.get((paths.here(db.DB_FILE), username))
+
+
+def forget_identity_conflict(username: str, marker) -> None:
     """Explicit account/cache deletion is the only reset of process quarantine."""
-    _identity_conflicts.discard((paths.here(db.DB_FILE), username))
+    key = (paths.here(db.DB_FILE), username)
+    with _lock:
+        if _identity_conflicts.get(key) is not marker:
+            return
+        _identity_conflicts.pop(key, None)
     _touch(username)
 
 

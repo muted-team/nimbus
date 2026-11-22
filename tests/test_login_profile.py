@@ -57,6 +57,15 @@ class LoginProfileTests(unittest.TestCase):
         self.assertTrue(profiles.identity_conflict(self.alias))
         self.assertTrue(profiles.get(self.alias)["identity_conflict"])
 
+    def test_captured_quarantine_reset_does_not_remove_a_newer_marker(self):
+        profiles.save_identity(self.alias, self.identity)
+        profiles.mark_identity_conflict(self.alias)
+        deleted_marker = profiles.identity_conflict_marker(self.alias)
+        profiles.mark_identity_conflict(self.alias)
+        profiles.forget_identity_conflict(self.alias, deleted_marker)
+        with patch.object(db, "connect", side_effect=AssertionError("The new in-memory marker must remain")):
+            self.assertTrue(profiles.identity_conflict(self.alias))
+
     def test_failed_session_deletion_keeps_registered_account_quarantined(self):
         profiles.save_identity(self.alias, self.identity)
         profiles.mark_identity_conflict(self.alias)
@@ -706,7 +715,7 @@ class LoginProfileTests(unittest.TestCase):
     def test_uid_conflict_stop_survives_process_memory_reset(self):
         profiles.save_identity(self.alias, self.identity)
         profiles.mark_identity_conflict(self.alias)
-        with patch.object(profiles, "_identity_conflicts", set()), patch.object(remote, "request") as request:
+        with patch.object(profiles, "_identity_conflicts", {}), patch.object(remote, "request") as request:
             self.assertTrue(profiles.identity_conflict(self.alias))
             self.assertTrue(accounts.list_accounts()[0]["profile"]["identity_conflict"])
             with self.assertRaises(remote.RemoteError) as caught:

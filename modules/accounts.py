@@ -507,8 +507,8 @@ def remove_account(username: str, new_device: bool = False) -> bool:
     if not isinstance(username, str) or not username or not _exists(username):
         return False
     _keep_device(username, new_device)
-    from . import client_session as SM
-    with _lock:
+    from . import client_session as SM, avatars, cloud, eventlog, profiles
+    with cloud._lock(username), _lock:
         raw = _read_raw()
         accounts = raw["accounts"]
         idx = next((i for i, a in enumerate(accounts)
@@ -517,6 +517,7 @@ def remove_account(username: str, new_device: bool = False) -> bool:
             return False
         account_path = paths.here(ACCOUNTS_FILE)
         original_accounts = account_path.read_bytes()
+        conflict_marker = profiles.identity_conflict_marker(username)
         accounts.pop(idx)
         _write_json(account_path, raw)
         try:
@@ -524,9 +525,8 @@ def remove_account(username: str, new_device: bool = False) -> bool:
         except OSError:
             _restore_json(account_path, original_accounts)
             raise
-    from . import avatars, eventlog, profiles
-    if avatars.remove(username):  # и аватарку, и профиль с постами
-        profiles.forget_identity_conflict(username)
+        if avatars.remove(username):  # и аватарку, и профиль с постами
+            profiles.forget_identity_conflict(username, conflict_marker)
     eventlog.say("аккаунт удалён из списка, компьютер %s"
                  % ("стёрт" if new_device else "сохранён"), "warn", username, "accounts")
     return True

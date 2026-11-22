@@ -15,6 +15,7 @@ import itertools
 import json
 import os
 from pathlib import Path
+from queue import Queue
 import socket
 import sys
 import tempfile
@@ -102,11 +103,28 @@ class ClientHTTPAcceptance(unittest.TestCase):
 
         self.stack.callback(stop)
 
-    def api(self, method, path, body=None, headers=None):
+    def api(self, method, path, body=None, headers=None, connection=None):
+        connection = connection or self.http
         data = None if body is None else json.dumps(body, ensure_ascii=False).encode()
-        self.http.request(method, path, data, {"Content-Type": "application/json", **(headers or {})})
-        response = self.http.getresponse()
+        connection.request(method, path, data, {"Content-Type": "application/json", **(headers or {})})
+        response = connection.getresponse()
         return response.status, json.loads(response.read())
+
+    def start_api(self, method, path, body):
+        replies = []
+
+        def request():
+            connection = http.client.HTTPConnection("127.0.0.1", self.local.server_port, timeout=8)
+            try:
+                replies.append(self.api(method, path, body, connection=connection))
+            except Exception as exc:
+                replies.append(exc)
+            finally:
+                connection.close()
+
+        thread = threading.Thread(target=request, daemon=True)
+        thread.start()
+        return thread, replies
 
     def requests_at(self, path):
         return [r for r in self.upstream.seen if r["path"] == path]
@@ -346,6 +364,177 @@ class ClientHTTPAcceptance(unittest.TestCase):
         self.assertFalse(result.get("stop_account", False))
         self.assertEqual(profiles.get(alias)["user_id"], "111")
         self.assertEqual(len(self.requests_at("/v2/login")), 3)
+
+    def test_obsolete_readback_cannot_quarantine_a_readded_account(self):
+        self.stack.enter_context(patch.object(client_device, "_DEFAULT_PROFILE", "camoufox158"))
+        account = {"username": USER, "password": "Synthetic-password"}
+        self.assertEqual(self.api("POST", "/api/accounts", account)[0], 200)
+        accounts._write_json(self.root / "accounts.json", {"accounts": [{**account, "registration_proxy": self.base}]})
+        profiles.save_identity(USER, {"user_id": "111", "unique_id": USER})
+        client_session.state_file(USER).write_text("SYNTHETIC_OLD")
+        entered, release = threading.Event(), threading.Event()
+
+        def respond(method, path, body):
+            if path.endswith("/profile/info"):
+                entered.set()
+                self.assertTrue(release.wait(6), "Old readback was not released")
+                return 200, {"state": "SYNTHETIC_FOREIGN", "data": {"verdict": "observed", "before": {
+                    "user_id": "222", "unique_id": "foreign.qa", "nickname": "Foreign"}}}, {}
+            if path.endswith("/profiles"):
+                return 200, {"profiles": [{"username": USER, "profile": {"user_id": "111", "unique_id": USER,
+                    "method": "ssr"}, "posts": None, "avatar_url": ""}], "failed": []}, {}
+            return 200, {"ok": True, "verdict": "ok", "state": "SYNTHETIC_REPLACEMENT",
+                         "profile": {"user_id": "111", "unique_id": USER}}, {}
+
+        self.upstream.respond = respond
+        deletion_stage = Queue()
+        deletion_thread = []
+        keep_device, request_lock, write_registry = accounts._keep_device, cloud._lock, accounts._write_json
+
+        def tracked_keep(*args, **kwargs):
+            keep_device(*args, **kwargs)
+            deletion_thread.append(threading.get_ident())
+
+        def tracked_lock(username):
+            if threading.get_ident() in deletion_thread:
+                deletion_stage.put("request-lock")
+            return request_lock(username)
+
+        def tracked_registry(*args, **kwargs):
+            write_registry(*args, **kwargs)
+            if threading.get_ident() in deletion_thread:
+                deletion_stage.put("registry-deleted")
+
+        self.stack.enter_context(patch.object(accounts, "_keep_device", side_effect=tracked_keep))
+        self.stack.enter_context(patch.object(cloud, "_lock", side_effect=tracked_lock))
+        self.stack.enter_context(patch.object(accounts, "_write_json", side_effect=tracked_registry))
+        reader, replies = self.start_api("POST", "/api/tiktok-profile/info", {"username": USER})
+        deleter = None
+        try:
+            self.assertTrue(entered.wait(4), "Readback never reached upstream")
+            deleter, deleted = self.start_api("POST", "/api/accounts/delete", {"username": USER, "new_device": True})
+            if deletion_stage.get(timeout=4) == "request-lock":
+                # Fixed deletion waits for the readback; the old code instead
+                # reaches registry deletion while that response is pending.
+                release.set()
+                reader.join(4)
+            deleter.join(4)
+            self.assertFalse(deleter.is_alive())
+            self.assertEqual(deleted[0][0], 200, deleted)
+            self.assertEqual(self.api("POST", "/api/accounts", account)[0], 200)
+            config.update({"proxy_enabled": True, "proxies": [self.base], "proxies_login": [self.base]})
+            status, refreshed = self.api("POST", "/api/profiles/fetch", {"usernames": [USER], "posts": False})
+            self.assertEqual(status, 200, refreshed)
+            self.assertEqual(profiles.get(USER)["user_id"], "111")
+        finally:
+            release.set()
+            reader.join(4)
+            if deleter:
+                deleter.join(4)
+        self.assertFalse(reader.is_alive())
+        self.assertIsInstance(replies[0], tuple, replies)
+        self.assertGreaterEqual(replies[0][0], 400)
+        self.assertFalse(profiles.identity_conflict(USER), "Obsolete UID evidence must not quarantine the replacement")
+        self.assertEqual(self.api("POST", "/api/login", {"username": USER})[1]["ok"], True)
+        self.assertEqual(client_session.state_file(USER).read_text(), "SYNTHETIC_REPLACEMENT")
+        self.assertFalse(profiles.identity_conflict(USER))
+
+    def test_invalidated_readback_is_rejected_before_uid_quarantine(self):
+        self.stack.enter_context(patch.object(client_device, "_DEFAULT_PROFILE", "camoufox158"))
+        account = {"username": USER, "password": "Synthetic-password", "registration_proxy": self.base}
+        accounts._write_json(self.root / "accounts.json", {"accounts": [account]})
+        profiles.save_identity(USER, {"user_id": "111", "unique_id": USER})
+        client_session.state_file(USER).write_text("SYNTHETIC_OLD")
+        entered, release = threading.Event(), threading.Event()
+
+        def respond(method, path, body):
+            if path.endswith("/profile/info"):
+                entered.set()
+                self.assertTrue(release.wait(6))
+                return 200, {"state": "SYNTHETIC_FOREIGN", "data": {"verdict": "observed", "before": {
+                    "user_id": "222", "unique_id": "foreign.qa", "nickname": "Foreign"}}}, {}
+            return 200, {"ok": True, "verdict": "ok", "state": "SYNTHETIC_REPLACEMENT",
+                         "profile": {"user_id": "111", "unique_id": USER}}, {}
+
+        self.upstream.respond = respond
+        reader, replies = self.start_api("POST", "/api/tiktok-profile/info", {"username": USER})
+        try:
+            self.assertTrue(entered.wait(4))
+            self.assertEqual(self.api("POST", "/api/accounts/clear-session", {"username": USER, "new_device": True})[0], 200)
+            client_session.state_file(USER).write_text("SYNTHETIC_REPLACEMENT")
+        finally:
+            release.set()
+            reader.join(4)
+        self.assertFalse(reader.is_alive())
+        self.assertGreaterEqual(replies[0][0], 400, replies)
+        self.assertFalse(profiles.identity_conflict(USER), "Obsolete evidence must not quarantine a newer generation")
+        self.assertEqual(client_session.state_file(USER).read_text(), "SYNTHETIC_REPLACEMENT")
+        self.assertTrue(self.api("POST", "/api/login", {"username": USER})[1]["ok"])
+        self.assertFalse(profiles.identity_conflict(USER))
+
+    def test_old_delete_cannot_clear_readded_accounts_fresh_quarantine(self):
+        from modules import avatars, db
+
+        self.stack.enter_context(patch.object(client_device, "_DEFAULT_PROFILE", "camoufox158"))
+        account = {"username": USER, "password": "Synthetic-password"}
+        self.assertEqual(self.api("POST", "/api/accounts", account)[0], 200)
+        profiles.save_identity(USER, {"user_id": "111", "unique_id": USER})
+        client_session.state_file(USER).write_text("SYNTHETIC_OLD")
+        cleanup_entered, release_cleanup = threading.Event(), threading.Event()
+        add_entered = threading.Event()
+        cleanup_owns_registry = []
+        remove, add = avatars.remove, accounts.add_account
+
+        def delayed_cleanup(username):
+            cleanup_owns_registry.append(accounts._lock._is_owned())
+            cleanup_entered.set()
+            self.assertTrue(release_cleanup.wait(6), "Old deletion cleanup was not released")
+            return remove(username)
+
+        def observed_add(body):
+            add_entered.set()
+            return add(body)
+
+        self.upstream.respond = lambda *args: (200, {"ok": True, "verdict": "ok", "state": "FOREIGN_FRESH",
+            "profile": {"user_id": "222", "unique_id": "foreign.qa"}}, {})
+        with patch.object(avatars, "remove", side_effect=delayed_cleanup), patch.object(accounts, "add_account", side_effect=observed_add):
+            deleter, deleted = self.start_api("POST", "/api/accounts/delete", {"username": USER, "new_device": True})
+            adder = None
+            try:
+                self.assertTrue(cleanup_entered.wait(4), "Deletion never reached cache cleanup")
+                adder, added = self.start_api("POST", "/api/accounts", account)
+                self.assertTrue(add_entered.wait(4), "Concurrent re-add never reached its handler")
+                # With the fix, re-add waits on the registry lock until cleanup ends.
+                if cleanup_owns_registry[0]:
+                    release_cleanup.set()
+                    deleter.join(4)
+                adder.join(4)
+                self.assertFalse(adder.is_alive())
+                self.assertEqual(added[0][0], 200, added)
+                profiles.save_identity(USER, {"user_id": "111", "unique_id": USER})
+                status, login = self.api("POST", "/api/login", {"username": USER})
+                self.assertEqual(status, 200, login)
+                self.assertTrue(login["identity_conflict"])
+            finally:
+                release_cleanup.set()
+                deleter.join(4)
+                if adder:
+                    adder.join(4)
+        self.assertFalse(deleter.is_alive())
+        self.assertEqual(deleted[0][0], 200, deleted)
+        self.assertTrue(accounts._exists(USER))
+        self.assertEqual(client_session.state_file(USER).read_text(), "FOREIGN_FRESH")
+        blocked = False
+        try:
+            cloud.delete_posts(USER, "", count="all")
+        except remote.RemoteError as exc:
+            blocked = exc.stop_account
+        self.assertEqual(self.requests_at("/v2/posts/delete"), [], "Old deletion must not reopen destructive dispatch")
+        self.assertTrue(blocked)
+        self.assertTrue(profiles.identity_conflict(USER))
+        with contextlib.closing(db.connect()) as conn:
+            self.assertEqual(conn.execute("SELECT user_id, unique_id FROM profiles WHERE username = ?", (USER,)).fetchone(),
+                             ("111", USER))
 
     def test_media_unicode_photo_video_duplicate_delete_and_keepalive(self):
         status, folder = self.api("POST", "/api/media", {"name": "QA 50% literal%20 # 🌷"})
