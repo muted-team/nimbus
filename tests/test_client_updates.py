@@ -115,7 +115,7 @@ class UpdatesTests(unittest.TestCase):
         for fields in ({"digest": {"PRIVATE_SENTINEL": True}}, {"size": "PRIVATE_SENTINEL"},
                        {"size": -1}, {"size": True}):
             with self.subTest(fields=fields), tempfile.TemporaryDirectory() as folder:
-                updater = u.Updater(folder, "1.0.2")
+                updater = u.Updater(folder, "1.0.2", package_target="linux-x86_64")
                 payload = release()
                 payload["assets"][0].update(fields)
                 with (patch.object(u, "fetch_json", return_value=payload),
