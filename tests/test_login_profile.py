@@ -10,7 +10,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from modules import accounts, avatars, campaign, client_device, client_session, cloud, config, db, paths, profiles, remote, signin
+from modules import accounts, avatars, campaign, client_device, client_session, cloud, config, db, eventlog, paths, profiles, remote, signin
 
 
 class LoginProfileTests(unittest.TestCase):
@@ -18,6 +18,7 @@ class LoginProfileTests(unittest.TestCase):
         stack = self.stack = contextlib.ExitStack()
         self.addCleanup(stack.close)
         self.root = Path(stack.enter_context(tempfile.TemporaryDirectory()))
+        stack.callback(self.close_fixture_log)
         stack.enter_context(paths.use_root(self.root))
         stack.enter_context(client_device.use_browser_profile("chrome152"))
         stack.enter_context(patch.object(config, "get", side_effect=lambda key, default=None: default))
@@ -28,6 +29,13 @@ class LoginProfileTests(unittest.TestCase):
         accounts.add_accounts_bulk(self.alias + ":synthetic-password")
         self.identity = {"user_id": "1000000000000000001", "unique_id": "real.profile",
                          "sec_uid": "synthetic-sec", "nickname": "Весна 🌷"}
+
+    def close_fixture_log(self):
+        with eventlog._file_lock:
+            if eventlog._file_handler_path == self.root / 'logs/events.log':
+                if eventlog._file_handler is not None:
+                    eventlog._file_handler.close()
+                eventlog._file_handler = eventlog._file_handler_path = None
 
     def test_email_login_saves_confirmed_identity_without_renaming_account(self):
         before = (self.root / "accounts.json").read_bytes()
@@ -48,6 +56,14 @@ class LoginProfileTests(unittest.TestCase):
         request.assert_called_once()
         self.assertEqual(request.call_args.kwargs["json"]["username"], self.alias)
         self.assertEqual(accounts.list_accounts()[0]["profile"]["unique_id"], "real.profile")
+
+    def test_fixture_cleanup_closes_its_log_before_removing_data(self):
+        eventlog.say('Synthetic fixture log')
+        handler = eventlog._file_handler
+        self.assertIsNotNone(handler.stream)
+        self.stack.close()
+        self.assertIsNone(handler.stream)
+        self.assertFalse(self.root.exists())
 
     def test_failed_cache_deletion_keeps_uid_quarantine(self):
         profiles.save_identity(self.alias, self.identity)
@@ -472,7 +488,7 @@ class LoginProfileTests(unittest.TestCase):
 
     def test_manual_login_returns_confirmed_uid_conflict_warning_without_selecting_default(self):
         profiles.save_identity(self.alias, self.identity)
-        tree = ast.parse((Path(__file__).resolve().parents[1] / "main.py").read_text())
+        tree = ast.parse((Path(__file__).resolve().parents[1] / "main.py").read_text(encoding="utf-8"))
         method = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "_api_login")
         scope = {"config": config}
         exec(compile(ast.Module(body=[method], type_ignores=[]), "main.py", "exec"), scope)
