@@ -472,6 +472,264 @@ class ClientHTTPAcceptance(unittest.TestCase):
         self.assertTrue(self.api("POST", "/api/login", {"username": USER})[1]["ok"])
         self.assertFalse(profiles.identity_conflict(USER))
 
+    def test_readback_generation_uid_guard_is_atomic_with_http_rename_readd(self):
+        self.stack.enter_context(patch.object(client_device, "_DEFAULT_PROFILE", "camoufox158"))
+        account = {"username": USER, "password": "Synthetic-password", "registration_proxy": self.base}
+        accounts._write_json(self.root / "accounts.json", {"accounts": [account]})
+        profiles.save_identity(USER, {"user_id": "111", "unique_id": USER})
+        client_session.state_file(USER).write_text("SYNTHETIC_OLD")
+        response_ready, paused, release, renaming = (threading.Event() for _ in range(4))
+        holds_files = []
+        generation_current, rename_jar = cloud._generation_current, client_session.rename_jar
+
+        def checked_generation(path, generation):
+            generation_current(path, generation)
+            if response_ready.is_set() and not paused.is_set():
+                holds_files.append(client_session._files_lock._is_owned())
+                paused.set()
+                self.assertTrue(release.wait(6))
+
+        def tracked_rename(*args):
+            renaming.set()
+            return rename_jar(*args)
+
+        def respond(method, path, body):
+            if path.endswith("/profile/info"):
+                response_ready.set()
+                return 200, {"state": "SYNTHETIC_FOREIGN", "data": {"verdict": "observed", "before": {
+                    "user_id": "222", "unique_id": "foreign.qa", "nickname": "Foreign"}}}, {}
+            if path.endswith("/profiles"):
+                return 200, {"profiles": [{"username": USER, "profile": {"user_id": "111", "unique_id": USER,
+                    "method": "ssr"}, "posts": None, "avatar_url": ""}], "failed": []}, {}
+            return 200, {"ok": True, "state": "SYNTHETIC_REPLACEMENT", "profile": {
+                "user_id": "111", "unique_id": USER}}, {}
+
+        self.upstream.respond = respond
+        with patch.object(cloud, "_generation_current", side_effect=checked_generation), \
+                patch.object(client_session, "rename_jar", side_effect=tracked_rename):
+            reader, replies = self.start_api("POST", "/api/tiktok-profile/info", {"username": USER})
+            renamer = None
+            try:
+                self.assertTrue(paused.wait(4), "Readback never paused after its successful generation check")
+                renamer, renamed = self.start_api("POST", "/api/accounts/update", {"username": USER, "patch": {
+                    "username": "moved.qa"}})
+                self.assertTrue(renaming.wait(4), "Rename did not reach the lifecycle lock")
+                if holds_files[0]:
+                    release.set()
+                    reader.join(4)
+                renamer.join(4)
+                self.assertFalse(renamer.is_alive())
+                self.assertEqual(renamed[0][0], 200, renamed)
+                self.assertEqual(self.api("POST", "/api/accounts", {"username": USER, "password": "Synthetic-password"})[0], 200)
+                config.update({"proxy_enabled": True, "proxies": [self.base], "proxies_login": [self.base]})
+                status, refreshed = self.api("POST", "/api/profiles/fetch", {"usernames": [USER], "posts": False})
+                self.assertEqual(status, 200, refreshed)
+                self.assertEqual(refreshed["failed"], [], refreshed)
+            finally:
+                release.set()
+                reader.join(4)
+                if renamer:
+                    renamer.join(4)
+        self.assertFalse(reader.is_alive())
+        self.assertGreaterEqual(replies[0][0], 400, replies)
+        self.assertFalse(profiles.identity_conflict(USER), "Old readback must not quarantine the re-added identity")
+        self.assertEqual(profiles.get(USER)["user_id"], "111")
+        self.assertTrue(self.api("POST", "/api/login", {"username": USER})[1]["ok"])
+        self.assertFalse(profiles.identity_conflict(USER))
+        self.assertTrue(profiles.identity_conflict("moved.qa"), "The renamed account retains its own confirmed conflict")
+        self.assertEqual(self.requests_at("/v2/posts/delete"), [])
+
+    def test_login_state_identity_commit_is_atomic_with_http_rename_readd(self):
+        self.stack.enter_context(patch.object(client_device, "_DEFAULT_PROFILE", "camoufox158"))
+        accounts.add_account({"username": USER, "password": "Synthetic-password"})
+        profiles.save_identity(USER, {"user_id": "111", "unique_id": USER})
+        client_session.state_file(USER).write_text("SYNTHETIC_OLD")
+        committed, release, renaming = (threading.Event() for _ in range(3))
+        holds_files = []
+        commit_login, rename_jar = client_session.complete_login_if_current, client_session.rename_jar
+
+        def paused_commit(*args):
+            result = commit_login(*args)
+            if not committed.is_set():
+                holds_files.append(client_session._files_lock._is_owned())
+                committed.set()
+                self.assertTrue(release.wait(6))
+            return result
+
+        def tracked_rename(*args):
+            renaming.set()
+            return rename_jar(*args)
+
+        def respond(method, path, body):
+            if path.endswith("/profiles"):
+                return 200, {"profiles": [{"username": USER, "profile": {"user_id": "111", "unique_id": USER,
+                    "method": "ssr"}, "posts": None, "avatar_url": ""}], "failed": []}, {}
+            uid = "222" if not committed.is_set() else "111"
+            return 200, {"ok": True, "state": "SYNTHETIC_LOGIN", "profile": {
+                "user_id": uid, "unique_id": "foreign.qa" if uid == "222" else USER}}, {}
+
+        self.upstream.respond = respond
+        with patch.object(client_session, "complete_login_if_current", side_effect=paused_commit), \
+                patch.object(client_session, "rename_jar", side_effect=tracked_rename):
+            login_thread, replies = self.start_api("POST", "/api/login", {"username": USER})
+            renamer = None
+            try:
+                self.assertTrue(committed.wait(4))
+                renamer, renamed = self.start_api("POST", "/api/accounts/update", {"username": USER, "patch": {
+                    "username": "moved.qa"}})
+                self.assertTrue(renaming.wait(4))
+                if holds_files[0]:
+                    release.set()
+                    login_thread.join(4)
+                renamer.join(4)
+                self.assertFalse(renamer.is_alive())
+                self.assertEqual(renamed[0][0], 200, renamed)
+                self.assertEqual(self.api("POST", "/api/accounts", {"username": USER, "password": "Synthetic-password"})[0], 200)
+                config.update({"proxy_enabled": True, "proxies": [self.base], "proxies_login": [self.base]})
+                self.assertEqual(self.api("POST", "/api/profiles/fetch", {"usernames": [USER], "posts": False})[1]["failed"], [])
+            finally:
+                release.set()
+                login_thread.join(4)
+                if renamer:
+                    renamer.join(4)
+        self.assertFalse(login_thread.is_alive())
+        self.assertEqual(replies[0][0], 200, replies)
+        self.assertFalse(profiles.identity_conflict(USER), "Old login must not quarantine the replacement cache")
+        self.assertEqual(profiles.get(USER)["user_id"], "111")
+        self.assertTrue(profiles.identity_conflict("moved.qa"))
+        self.assertTrue(self.api("POST", "/api/login", {"username": USER})[1]["ok"])
+        self.assertFalse(profiles.identity_conflict(USER))
+
+    def test_uid_response_critical_sections_serialize_http_session_clear(self):
+        self.stack.enter_context(patch.object(client_device, "_DEFAULT_PROFILE", "camoufox158"))
+        for kind in ("readback", "session-check", "login"):
+            with self.subTest(kind=kind):
+                username = "atomic." + kind.replace("-", "_")
+                accounts.add_account({"username": username, "password": "Synthetic-password"})
+                config.update({"proxy_enabled": True, "proxies": [self.base], "proxies_login": [self.base]})
+                profiles.save_identity(username, {"user_id": "111", "unique_id": username})
+                client_session.state_file(username).write_text("SYNTHETIC_OLD")
+                pause, release, clearing = (threading.Event() for _ in range(3))
+                holds_files, outcomes = [], []
+                clear_session, generation_current, save_state, commit_login = (
+                    client_session.clear_session, cloud._generation_current, cloud._save, client_session.complete_login_if_current)
+
+                def wait_at_seam():
+                    holds_files.append(client_session._files_lock._is_owned())
+                    pause.set()
+                    self.assertTrue(release.wait(6))
+
+                def checked_generation(path, generation):
+                    generation_current(path, generation)
+                    if pause.is_set() or not response_ready.is_set():
+                        return
+                    wait_at_seam()
+
+                def saved_state(*args):
+                    result = save_state(*args)
+                    wait_at_seam()
+                    return result
+
+                def committed_login(*args):
+                    result = commit_login(*args)
+                    wait_at_seam()
+                    return result
+
+                def tracked_clear(*args, **kwargs):
+                    clearing.set()
+                    return clear_session(*args, **kwargs)
+
+                response_ready = threading.Event()
+
+                def respond(method, path, body):
+                    response_ready.set()
+                    if kind == "login":
+                        return 200, {"ok": True, "state": "SYNTHETIC_FOREIGN", "profile": {
+                            "user_id": "222", "unique_id": "foreign.qa"}}, {}
+                    data = ({"verdict": "observed", "before": {"user_id": "222", "unique_id": "foreign.qa", "nickname": "Foreign"}}
+                            if kind == "readback" else {"alive": True, "uid": "222", "message": "success"})
+                    return 200, {"state": "SYNTHETIC_FOREIGN", "data": data}, {}
+
+                self.upstream.respond = respond
+
+                def operation():
+                    with paths.use_root(self.root), client_device.use_browser_profile("camoufox158"):
+                        try:
+                            if kind == "session-check":
+                                outcomes.append(cloud.session_check(username, ""))
+                        except Exception as exc:
+                            outcomes.append(exc)
+
+                with contextlib.ExitStack() as hooks:
+                    hooks.enter_context(patch.object(client_session, "clear_session", side_effect=tracked_clear))
+                    if kind == "readback":
+                        hooks.enter_context(patch.object(cloud, "_generation_current", side_effect=checked_generation))
+                        thread, outcomes = self.start_api("POST", "/api/tiktok-profile/info", {"username": username})
+                    elif kind == "session-check":
+                        hooks.enter_context(patch.object(cloud, "_save", side_effect=saved_state))
+                        thread = threading.Thread(target=operation, daemon=True)
+                        thread.start()
+                    else:
+                        hooks.enter_context(patch.object(client_session, "complete_login_if_current", side_effect=committed_login))
+                        thread, outcomes = self.start_api("POST", "/api/login", {"username": username})
+                    clearer = None
+                    try:
+                        self.assertTrue(pause.wait(4), "Response never reached its local commit seam")
+                        clearer, cleared = self.start_api("POST", "/api/accounts/clear-session", {"username": username, "new_device": True})
+                        self.assertTrue(clearing.wait(4))
+                        if holds_files[0]:
+                            release.set()
+                            thread.join(4)
+                        clearer.join(4)
+                        self.assertFalse(clearer.is_alive())
+                        self.assertEqual(cleared[0][0], 200, cleared)
+                    finally:
+                        release.set()
+                        thread.join(4)
+                        if clearer:
+                            clearer.join(4)
+                self.assertFalse(thread.is_alive())
+                self.assertTrue(outcomes)
+                self.assertEqual(holds_files, [True], "Generation, state and UID mutation must share the files lock")
+                self.assertFalse(client_session.state_file(username).exists(), "Session clear must run after the atomic response decision")
+
+    def test_pending_network_response_does_not_hold_lifecycle_locks(self):
+        self.stack.enter_context(patch.object(client_device, "_DEFAULT_PROFILE", "camoufox158"))
+        accounts._write_json(self.root / "accounts.json", {"accounts": [{"username": USER,
+            "password": "Synthetic-password", "registration_proxy": self.base},
+            {"username": "unrelated.qa", "password": "Synthetic-password"}]})
+        client_session.state_file(USER).write_text("SYNTHETIC_OLD")
+        client_session.state_file("unrelated.qa").write_text("SYNTHETIC_UNRELATED")
+        entered, release = threading.Event(), threading.Event()
+
+        def respond(*args):
+            entered.set()
+            self.assertTrue(release.wait(6))
+            return 200, {"state": "SYNTHETIC_NEW", "data": {"verdict": "observed", "before": {
+                "user_id": "111", "unique_id": USER, "nickname": "Synthetic"}}}, {}
+
+        request = remote.request
+
+        def unlocked_request(*args, **kwargs):
+            self.assertFalse(client_session._files_lock._is_owned())
+            self.assertFalse(accounts._lock._is_owned())
+            self.assertFalse(profiles._lock.locked())
+            return request(*args, **kwargs)
+
+        self.upstream.respond = respond
+        with patch.object(remote, "request", side_effect=unlocked_request):
+            reader, replies = self.start_api("POST", "/api/tiktok-profile/info", {"username": USER})
+            try:
+                self.assertTrue(entered.wait(4))
+                self.assertEqual(self.api("POST", "/api/accounts/clear-session", {
+                    "username": "unrelated.qa", "new_device": True})[0], 200)
+                self.assertFalse(client_session.state_file("unrelated.qa").exists())
+            finally:
+                release.set()
+                reader.join(4)
+        self.assertFalse(reader.is_alive())
+        self.assertEqual(replies[0][0], 200, replies)
+
     def test_old_delete_cannot_clear_readded_accounts_fresh_quarantine(self):
         from modules import avatars, db
 

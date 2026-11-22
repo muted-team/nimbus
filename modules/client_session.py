@@ -393,6 +393,12 @@ def rename_jar(old: str, new: str) -> bool:
             for source, target in moves:
                 source.replace(target)
                 moved.append((source, target))
+            from . import profiles
+            with profiles._lock:
+                database = paths.here(profiles.db.DB_FILE)
+                marker = profiles._identity_conflicts.pop((database, old), None)
+                if marker is not None:
+                    profiles._identity_conflicts.setdefault((database, new), marker)
             return True
         except OSError as exc:
             for source, target in reversed(moved):

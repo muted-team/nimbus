@@ -262,53 +262,56 @@ def _call(username: str, path: str, body: dict, timeout=LONG) -> dict:
                     exc.network = False
                 raise
             return _unknown_publication(str(exc))
-        if publication:
-            return _publication_out(username, out, generation)
-        if upload:
-            return _upload_out(username, path, body, out, generation)
-        if not isinstance(out, dict):
-            raise remote.RemoteError("сервер вернул ответ неверного формата",
-                                     stop_account=protected, outcome_unknown=protected)
-        _generation_current(state_file(username), generation)
-        checked = out.get("data")
-        if (path.rstrip("/").endswith("/session/check") and isinstance(checked, dict)
-                and checked.get("alive") is True and not _session_uid_valid(checked.get("uid"))):
-            return {"data": {"alive": False, "network": False, "verdict": "unknown", "stop_account": True,
-                             "error": "Проверка сессии не подтверждена. Обработка аккаунта остановлена."}}
-        observed = checked.get("before") if isinstance(checked, dict) else None
-        if (path.rstrip("/").endswith("/profile/info") and isinstance(checked, dict)
-                and checked.get("verdict") == "observed"
-                and isinstance(observed, dict) and isinstance(observed.get("user_id"), str)
-                and profiles._UID_RE.fullmatch(observed["user_id"])):
+        # Lifecycle invalidation and the local UID/state decision are one operation;
+        # no file or registry lock is held while the request is on the network.
+        with session_manager._files_lock:
+            if publication:
+                return _publication_out(username, out, generation)
+            if upload:
+                return _upload_out(username, path, body, out, generation)
+            if not isinstance(out, dict):
+                raise remote.RemoteError("сервер вернул ответ неверного формата",
+                                         stop_account=protected, outcome_unknown=protected)
+            _generation_current(state_file(username), generation)
+            checked = out.get("data")
+            if (path.rstrip("/").endswith("/session/check") and isinstance(checked, dict)
+                    and checked.get("alive") is True and not _session_uid_valid(checked.get("uid"))):
+                return {"data": {"alive": False, "network": False, "verdict": "unknown", "stop_account": True,
+                                 "error": "Проверка сессии не подтверждена. Обработка аккаунта остановлена."}}
+            observed = checked.get("before") if isinstance(checked, dict) else None
+            if (path.rstrip("/").endswith("/profile/info") and isinstance(checked, dict)
+                    and checked.get("verdict") == "observed"
+                    and isinstance(observed, dict) and isinstance(observed.get("user_id"), str)
+                    and profiles._UID_RE.fullmatch(observed["user_id"])):
+                try:
+                    profiles.require_uid(username, observed["user_id"])
+                except profiles.ProfileUIDConflict:
+                    profiles.mark_identity_conflict(username)
+                    raise remote.RemoteError(profiles.IDENTITY_CONFLICT, status=400, stop_account=True) from None
+                except (OSError, profiles.sqlite3.Error):
+                    raise remote.RemoteError("Не удалось проверить UID сохранённого профиля.", stop_account=True) from None
             try:
-                profiles.require_uid(username, observed["user_id"])
-            except profiles.ProfileUIDConflict:
-                profiles.mark_identity_conflict(username)
-                raise remote.RemoteError(profiles.IDENTITY_CONFLICT, status=400, stop_account=True) from None
-            except (OSError, profiles.sqlite3.Error):
-                raise remote.RemoteError("Не удалось проверить UID сохранённого профиля.", stop_account=True) from None
-        try:
-            saved = _save(username, out.pop("state", None), generation)
-        except OSError:
-            raise remote.RemoteError("Не удалось сохранить состояние аккаунта.",
-                                     stop_account=True, outcome_unknown=protected) from None
-        if not saved:
-            raise remote.RemoteError("Состояние аккаунта изменено. Ответ не сохранён.", stop_account=True)
-        if (path.rstrip("/").endswith("/session/check") and isinstance(checked, dict)
-                and checked.get("alive") is True and _session_uid_valid(checked.get("uid"))
-                and checked.get("http_status") in (None, 200) and checked.get("message") in (None, "success")
-                and checked.get("code") in (None, 0) and checked.get("verdict") != "unknown"
-                and checked.get("stop_account") is not True and out.get("state_saved") is not False):
-            try:
-                profiles.require_uid(username, str(checked["uid"]))
-            except profiles.ProfileUIDConflict:
-                profiles.mark_identity_conflict(username)
-                out["data"] = dict(checked, identity_conflict=True, stop_account=True, network=False,
-                                   error=profiles.IDENTITY_CONFLICT)
-            except (OSError, profiles.sqlite3.Error):
-                out["data"] = dict(checked, stop_account=True, network=False,
-                                   error="Не удалось проверить UID сохранённого профиля.")
-        return out
+                saved = _save(username, out.pop("state", None), generation)
+            except OSError:
+                raise remote.RemoteError("Не удалось сохранить состояние аккаунта.",
+                                         stop_account=True, outcome_unknown=protected) from None
+            if not saved:
+                raise remote.RemoteError("Состояние аккаунта изменено. Ответ не сохранён.", stop_account=True)
+            if (path.rstrip("/").endswith("/session/check") and isinstance(checked, dict)
+                    and checked.get("alive") is True and _session_uid_valid(checked.get("uid"))
+                    and checked.get("http_status") in (None, 200) and checked.get("message") in (None, "success")
+                    and checked.get("code") in (None, 0) and checked.get("verdict") != "unknown"
+                    and checked.get("stop_account") is not True and out.get("state_saved") is not False):
+                try:
+                    profiles.require_uid(username, str(checked["uid"]))
+                except profiles.ProfileUIDConflict:
+                    profiles.mark_identity_conflict(username)
+                    out["data"] = dict(checked, identity_conflict=True, stop_account=True, network=False,
+                                       error=profiles.IDENTITY_CONFLICT)
+                except (OSError, profiles.sqlite3.Error):
+                    out["data"] = dict(checked, stop_account=True, network=False,
+                                       error="Не удалось проверить UID сохранённого профиля.")
+            return out
 
 
 def _upload_out(username: str, path: str, body: dict, response, generation: int = None) -> dict:
@@ -427,34 +430,35 @@ def login(acc: dict, proxy: str) -> dict:
         if out["ok"]:
             token = out.pop("state", None)
             saved = isinstance(token, str) and bool(token.strip()) and out.get("state_saved") is not False
-            try:
-                if saved:
-                    saved = session_manager.complete_login_if_current(
-                        auth_path, token, auth_generation, kept, kept_generation) is not False
-            except OSError:
-                saved = False
-            if not saved:
-                out.update(ok=False, reason="Не удалось сохранить подтверждённый вход аккаунта",
-                           network=False, verdict="unknown", retriable=False, state_saved=False)
-                return out
-            from . import profiles
-            try:
-                if out.get("profile") is None:
-                    if profiles.identity_conflict(u):
-                        raise profiles.ProfileUIDConflict(profiles.IDENTITY_CONFLICT)
-                else:
-                    profiles.save_identity(u, out["profile"])
-                    out["profile_saved"] = True
-            except profiles.ProfileUIDConflict:
-                profiles.mark_identity_conflict(u)
-                out.update(profile_saved=False, identity_conflict=True, stop_account=True,
-                           state_saved=True, network=False, retriable=False, warning=profiles.IDENTITY_CONFLICT)
-            except (profiles.ProfileError, OSError, profiles.sqlite3.Error):
-                # The confirmed session remains usable; never repeat login for a cache failure.
-                out.update(profile_saved=False,
-                           warning="Вход подтверждён, но профиль не сохранён локально. Повторный вход не нужен.")
-                if out.get("profile") is None:
-                    out["stop_account"] = True  # No UID available to check an unreadable cache.
+            with session_manager._files_lock:
+                try:
+                    if saved:
+                        saved = session_manager.complete_login_if_current(
+                            auth_path, token, auth_generation, kept, kept_generation) is not False
+                except OSError:
+                    saved = False
+                if not saved:
+                    out.update(ok=False, reason="Не удалось сохранить подтверждённый вход аккаунта",
+                               network=False, verdict="unknown", retriable=False, state_saved=False)
+                    return out
+                from . import profiles
+                try:
+                    if out.get("profile") is None:
+                        if profiles.identity_conflict(u):
+                            raise profiles.ProfileUIDConflict(profiles.IDENTITY_CONFLICT)
+                    else:
+                        profiles.save_identity(u, out["profile"])
+                        out["profile_saved"] = True
+                except profiles.ProfileUIDConflict:
+                    profiles.mark_identity_conflict(u)
+                    out.update(profile_saved=False, identity_conflict=True, stop_account=True,
+                               state_saved=True, network=False, retriable=False, warning=profiles.IDENTITY_CONFLICT)
+                except (profiles.ProfileError, OSError, profiles.sqlite3.Error):
+                    # The confirmed session remains usable; never repeat login for a cache failure.
+                    out.update(profile_saved=False,
+                               warning="Вход подтверждён, но профиль не сохранён локально. Повторный вход не нужен.")
+                    if out.get("profile") is None:
+                        out["stop_account"] = True  # No UID available to check an unreadable cache.
         else:
             saved = out.get("state")
             if (isinstance(saved, str) and saved.strip() and out.get("state_saved") is not False
