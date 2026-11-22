@@ -24,6 +24,11 @@ def nuitka_command(target: str, output: Path) -> list[str]:
         command += ["--windows-console-mode=disable", "--windows-icon-from-ico=app.ico"]
     if target == "darwin":
         command += ["--macos-create-app-bundle", "--macos-app-name=Nimbus"]
+    if target == "linux":
+        # GTK3/WebKit use system typelibs; compiled GI stand-ins break dynamic overrides.
+        command += ["--nofollow-import-to=gi.repository.*", "--include-package=gi.overrides",
+                    "--no-deployment-flag=gi-runtime-namespaces",
+                    "--no-deployment-flag=excluded-module-usage"]
     # Each package carries the toolkit used on its target OS.
     unwanted = {"win32": ("android", "cocoa", "gtk", "qt"),
                 "linux": ("android", "cocoa", "winforms", "edgechromium"),

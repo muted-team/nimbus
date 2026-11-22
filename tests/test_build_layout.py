@@ -8,6 +8,18 @@ import build
 
 
 class BuildLayoutTests(unittest.TestCase):
+    def test_linux_keeps_system_gi_namespaces_dynamic_with_bundled_overrides(self):
+        options = {
+            '--nofollow-import-to=gi.repository.*',
+            '--include-package=gi.overrides',
+            '--no-deployment-flag=gi-runtime-namespaces',
+            '--no-deployment-flag=excluded-module-usage',
+        }
+        self.assertTrue(options <= set(build.nuitka_command('linux', Path('fixture-output'))))
+        for target in ('win32', 'darwin'):
+            with self.subTest(target=target):
+                self.assertFalse(options & set(build.nuitka_command(target, Path('fixture-output'))))
+
     def test_every_runtime_explicitly_bundles_the_public_tls_trust_store(self):
         for target in ("linux", "win32", "darwin"):
             with self.subTest(target=target):
