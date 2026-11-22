@@ -1,10 +1,14 @@
 import hashlib
 import io
+import json
+import socket
+import ssl
 import tempfile
 import subprocess
 import sys
 import time
 import unittest
+import urllib.error
 from pathlib import Path
 from unittest.mock import patch
 import zipfile
@@ -29,6 +33,151 @@ def release(version="1.0.3", data=b"zip"):
 
 
 class UpdatesTests(unittest.TestCase):
+    def assert_safe_failure(self, error, expected):
+        if isinstance(error, urllib.error.HTTPError):
+            self.addCleanup(error.close)
+        with tempfile.TemporaryDirectory() as folder:
+            updater = u.Updater(folder, "1.0.2")
+            with patch.object(u.urllib.request, "urlopen", side_effect=error):
+                for action in (updater.check, updater.prepare):
+                    with self.subTest(action=action.__name__), self.assertRaises(u.UpdateError) as failure:
+                        action()
+                    self.assertIn(expected, str(failure.exception))
+                    self.assertNotIn("PRIVATE_SENTINEL", str(failure.exception))
+                    self.assertNotIn("https://", str(failure.exception))
+                    self.assertFalse(updater.lock.locked())
+                    if action.__name__ == "prepare":
+                        self.assertIn("Текущая версия и данные сохранены", str(failure.exception))
+            self.assertIsNone(updater.staged)
+            self.assertEqual(list(Path(folder).iterdir()), [])
+
+    def test_github_rate_limit_is_identified_for_check_and_prepare_without_raw_details(self):
+        error = urllib.error.HTTPError("https://fixture.invalid/PRIVATE_SENTINEL", 403,
+                                       "PRIVATE_SENTINEL", {"X-RateLimit-Remaining": "0"}, None)
+        self.assert_safe_failure(error, "лимит запросов GitHub (HTTP 403)")
+
+    def test_other_http_failures_show_safe_status_not_a_connection_guess(self):
+        for code in (403, 404, 502):
+            with self.subTest(code=code):
+                error = urllib.error.HTTPError("https://fixture.invalid/PRIVATE_SENTINEL", code,
+                                               "PRIVATE_SENTINEL", {}, None)
+                self.assert_safe_failure(error, f"GitHub вернул HTTP {code}")
+
+    def test_http_429_reports_a_rate_limit_even_without_remaining_header(self):
+        error = urllib.error.HTTPError("https://fixture.invalid/PRIVATE_SENTINEL", 429,
+                                       "PRIVATE_SENTINEL", {}, None)
+        self.assert_safe_failure(error, "лимит запросов GitHub (HTTP 429)")
+
+    def test_tls_failures_are_identified_without_exposing_certificate_details(self):
+        for error in (ssl.SSLCertVerificationError(1, "PRIVATE_SENTINEL"),
+                      ssl.SSLError(1, "PRIVATE_SENTINEL")):
+            with self.subTest(error=type(error).__name__):
+                self.assert_safe_failure(urllib.error.URLError(error), "TLS GitHub")
+
+    def test_certificate_validation_failure_is_distinct_from_other_tls_errors(self):
+        self.assert_safe_failure(urllib.error.URLError(ssl.SSLCertVerificationError(1, "PRIVATE_SENTINEL")),
+                                 "проверки сертификата TLS GitHub")
+
+    def test_timeout_is_identified_for_wrapped_and_direct_errors(self):
+        for error in (TimeoutError("PRIVATE_SENTINEL"), urllib.error.URLError(TimeoutError("PRIVATE_SENTINEL"))):
+            with self.subTest(error=type(error).__name__):
+                self.assert_safe_failure(error, "время ожидания ответа GitHub")
+
+    def test_dns_failure_is_distinct_from_tls_and_timeout(self):
+        self.assert_safe_failure(urllib.error.URLError(socket.gaierror(socket.EAI_NONAME, "PRIVATE_SENTINEL")),
+                                 "DNS: не удалось найти GitHub")
+
+    def test_connection_failure_is_safe_without_fabricating_a_tls_or_http_reason(self):
+        self.assert_safe_failure(urllib.error.URLError(ConnectionRefusedError("PRIVATE_SENTINEL")),
+                                 "Не удалось соединиться с GitHub")
+
+    def test_malformed_release_json_is_not_reported_as_connection_failure(self):
+        for data in (b'{"PRIVATE_SENTINEL":', b'\xffPRIVATE_SENTINEL'):
+            with self.subTest(data=data), tempfile.TemporaryDirectory() as folder:
+                updater = u.Updater(folder, "1.0.2")
+                for action in (updater.check, updater.prepare):
+                    with (patch.object(u.urllib.request, "urlopen", return_value=io.BytesIO(data)),
+                          self.assertRaises(u.UpdateError) as failure):
+                        action()
+                    self.assertIn("GitHub вернул некорректный ответ", str(failure.exception))
+                    self.assertNotIn("PRIVATE_SENTINEL", str(failure.exception))
+                    self.assertFalse(updater.lock.locked())
+                self.assertEqual(list(Path(folder).iterdir()), [])
+
+    def test_release_shape_is_validated_at_the_public_api_boundary(self):
+        for payload in (None, [], dict(release(), assets="PRIVATE_SENTINEL"),
+                        dict(release(), assets=["PRIVATE_SENTINEL"]), dict(release(), assets=None)):
+            with self.subTest(payload=payload), self.assertRaises(u.UpdateError) as failure:
+                u.select_release(payload, "1.0.2", "linux-x86_64")
+            self.assertIn("GitHub вернул некорректный ответ", str(failure.exception))
+
+    def test_malformed_asset_fields_fail_as_bad_response_without_exposing_values(self):
+        for fields in ({"digest": {"PRIVATE_SENTINEL": True}}, {"size": "PRIVATE_SENTINEL"},
+                       {"size": -1}, {"size": True}):
+            with self.subTest(fields=fields), tempfile.TemporaryDirectory() as folder:
+                updater = u.Updater(folder, "1.0.2")
+                payload = release()
+                payload["assets"][0].update(fields)
+                with (patch.object(u, "fetch_json", return_value=payload),
+                      self.assertRaises(u.UpdateError) as failure):
+                    updater.check()
+                self.assertIn("GitHub вернул некорректный ответ", str(failure.exception))
+                self.assertNotIn("PRIVATE_SENTINEL", str(failure.exception))
+
+    def test_release_request_trusts_shipped_ca_bundle_with_tls_verification_on(self):
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        self.assertEqual(context.cert_store_stats()["x509_ca"], 0)
+
+        def respond(request, *, timeout, **options):
+            self.assertIs(options.get("context"), context)
+            self.assertGreater(context.cert_store_stats()["x509_ca"], 0)
+            self.assertEqual(context.verify_mode, ssl.CERT_REQUIRED)
+            self.assertTrue(context.check_hostname)
+            self.assertEqual(request.full_url, u.API)
+            self.assertEqual(timeout, 30)
+            self.assertIsNone(request.get_header("Authorization"))
+            return io.BytesIO(json.dumps(release()).encode())
+
+        with (patch.object(ssl, "create_default_context", return_value=context),
+              patch.object(u.urllib.request, "urlopen", side_effect=respond)):
+            self.assertEqual(u.fetch_json(u.API), release())
+
+    def test_archive_request_uses_the_same_verified_trust_bundle(self):
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        data = self.package()
+        with tempfile.TemporaryDirectory() as folder:
+            _, updater = self.installation(folder)
+            with (patch.object(ssl, "create_default_context", return_value=context),
+                  patch.object(u.urllib.request, "urlopen", side_effect=[
+                      io.BytesIO(json.dumps(release(data=data)).encode()), io.BytesIO(data),
+                  ]) as open_url):
+                self.assertEqual(updater.prepare()["state"], "ready")
+            self.assertEqual(open_url.call_count, 2)
+            self.assertIs(open_url.call_args.kwargs.get("context"), context)
+            self.assertGreater(context.cert_store_stats()["x509_ca"], 0)
+            self.assertEqual(context.verify_mode, ssl.CERT_REQUIRED)
+            self.assertTrue(context.check_hostname)
+            self.assertEqual(open_url.call_args.kwargs["timeout"], 60)
+            self.assertIsNone(open_url.call_args.args[0].get_header("Authorization"))
+
+    def test_archive_tls_failure_has_safe_reason_and_removes_partial_stage(self):
+        data = self.package()
+        with tempfile.TemporaryDirectory() as folder:
+            root, updater = self.installation(folder)
+            before = {p.relative_to(root): p.read_bytes() for p in root.rglob("*") if p.is_file()}
+            with (patch.object(u, "fetch_json", return_value=release(data=data)),
+                  patch.object(u.urllib.request, "urlopen", side_effect=urllib.error.URLError(
+                      ssl.SSLCertVerificationError(1, "PRIVATE_SENTINEL"))),
+                  self.assertRaises(u.UpdateError) as failure):
+                updater.prepare()
+            self.assertIn("проверки сертификата TLS GitHub", str(failure.exception))
+            self.assertIn("Текущая версия и данные сохранены", str(failure.exception))
+            self.assertNotIn("PRIVATE_SENTINEL", str(failure.exception))
+            self.assertIsNone(updater.staged)
+            self.assertFalse(updater.lock.locked())
+            self.assertFalse(list(root.glob(".nimbus-update-*")))
+            self.assertEqual({p.relative_to(root): p.read_bytes() for p in root.rglob("*") if p.is_file()}, before)
+
     def test_platform_mapping_never_cross_installs(self):
         self.assertEqual(u.target("Windows", "AMD64"), "win32-AMD64")
         self.assertEqual(u.target("Darwin", "arm64"), "darwin-arm64")

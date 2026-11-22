@@ -17,6 +17,7 @@ def nuitka_command(target: str, output: Path) -> list[str]:
                "--output-filename=" + ("Nimbus-runtime.exe" if target == "win32" else "Nimbus-runtime" if target == "linux" else "Nimbus"),
                "--include-data-dir=ui=ui", "--include-data-file=CHANGELOG.md=CHANGELOG.md",
                "--include-data-file=modules/ca.pem=modules/ca.pem",
+               "--include-package-data=certifi",
                "--include-data-file=LICENSE=LICENSE",
                "--include-data-file=THIRD_PARTY_NOTICES.md=THIRD_PARTY_NOTICES.md"]
     if target == "win32":

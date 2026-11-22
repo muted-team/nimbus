@@ -7,6 +7,7 @@ import {
 } from "lucide-react"
 
 import { useChangelog } from "@/api/misc"
+import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Spinner } from "@/components/ui/spinner"
 import { SettingRow, SettingsGroup } from "@/features/settings/settings-row"
@@ -165,17 +166,15 @@ export function ClientUpdates() {
         ? text.downloading
         : busy === "restart"
           ? text.restarting
-          : error
-            ? text.failed
-            : status?.state === "ready"
-              ? canRestart
-                ? text.ready
-                : text.manualReady
-              : status
-                ? status.available
-                  ? `${text.newer} ${status.latest_version}`
-                  : text.current
-                : text.idle
+          : status?.state === "ready"
+            ? canRestart
+              ? text.ready
+              : text.manualReady
+            : status
+              ? status.available
+                ? `${text.newer} ${status.latest_version}`
+                : text.current
+              : text.idle
 
   return (
     <SettingsGroup
@@ -188,29 +187,31 @@ export function ClientUpdates() {
     >
       <SettingRow label={text.version}>
         <div className="flex w-full flex-col items-start gap-3">
-          <div
-            className="flex items-center gap-2 text-sm"
-            role="status"
-            aria-live="polite"
-          >
-            {busy ? (
-              <Spinner />
-            ) : status?.state === "ready" ? (
-              <ShieldCheckIcon className="size-4 shrink-0 text-success" />
-            ) : null}
-            <span>{message}</span>
-          </div>
           {error ? (
-            <p role="alert" className="text-sm text-destructive">
-              {error}
-            </p>
-          ) : null}
+            <Alert variant="destructive">
+              <AlertDescription>{error}</AlertDescription>
+            </Alert>
+          ) : (
+            <div
+              className="flex items-center gap-2 text-sm"
+              role="status"
+              aria-live="polite"
+            >
+              {busy ? (
+                <Spinner />
+              ) : status?.state === "ready" ? (
+                <ShieldCheckIcon className="size-4 shrink-0 text-success" />
+              ) : null}
+              <span>{message}</span>
+            </div>
+          )}
           {!native || (status && !status.supported) ? (
             <p className="text-sm text-muted-foreground">{text.browser}</p>
           ) : null}
           {native ? (
             <div className="flex flex-wrap gap-2">
               <Button
+                data-action="check"
                 variant="outline"
                 disabled={Boolean(busy) || status?.state === "ready"}
                 onClick={() => void run("check")}
@@ -222,6 +223,7 @@ export function ClientUpdates() {
               status.supported &&
               status.state !== "ready" ? (
                 <Button
+                  data-action="prepare"
                   disabled={Boolean(busy)}
                   onClick={() => void run("prepare")}
                 >
@@ -250,6 +252,7 @@ export function ClientUpdates() {
           ) : null}
           {status?.state === "ready" && canRestart ? (
             <Button
+              data-action="restart"
               disabled={Boolean(busy)}
               onClick={() => void run("restart")}
             >

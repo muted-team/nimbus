@@ -5,12 +5,17 @@ from pathlib import Path, PurePosixPath
 import platform
 import re
 import shutil
+import socket
+import ssl
 import stat
 import sys
 import tempfile
 import threading
+import urllib.error
 import urllib.request
 import zipfile
+
+import certifi
 
 REPOSITORY = "muted-team/nimbus"
 RELEASES = "https://github.com/" + REPOSITORY + "/releases"
@@ -26,6 +31,28 @@ RESERVED_USER_DATA = ("config.json", "accounts.json", "banned.json", "data.db", 
 
 class UpdateError(Exception):
     pass
+
+
+def _failure_reason(error):
+    if isinstance(error, urllib.error.HTTPError):
+        if (error.code == 429 or error.code == 403
+                and (error.headers or {}).get("X-RateLimit-Remaining") == "0"):
+            return f"Превышен лимит запросов GitHub (HTTP {error.code}). Повторите позже."
+        return f"GitHub вернул HTTP {error.code}. Повторите позже."
+    reason = error.reason if isinstance(error, urllib.error.URLError) else error
+    if isinstance(reason, ssl.SSLCertVerificationError):
+        return "Ошибка проверки сертификата TLS GitHub."
+    if isinstance(reason, ssl.SSLError):
+        return "Не удалось проверить защищённое соединение TLS GitHub."
+    if isinstance(reason, TimeoutError):
+        return "Превышено время ожидания ответа GitHub. Повторите позже."
+    if isinstance(reason, socket.gaierror):
+        return "Ошибка DNS: не удалось найти GitHub."
+    if isinstance(error, urllib.error.URLError) or isinstance(reason, ConnectionError):
+        return "Не удалось соединиться с GitHub. Повторите позже."
+    if isinstance(error, (json.JSONDecodeError, UnicodeError)):
+        return "GitHub вернул некорректный ответ."
+    return "Неизвестная ошибка. Повторите позже."
 
 
 def version(value):
@@ -44,13 +71,23 @@ def target(system=None, machine=None):
     return None
 
 
+def _tls_context():
+    context = ssl.create_default_context()
+    # Standalone OpenSSL can point at CA paths absent on the user's OS.
+    context.load_verify_locations(cafile=certifi.where())
+    return context
+
+
 def fetch_json(url):
     request = urllib.request.Request(url, headers={"Accept": "application/vnd.github+json", "User-Agent": "Nimbus-client-updater"})
-    with urllib.request.urlopen(request, timeout=30) as response:
+    with urllib.request.urlopen(request, timeout=30, context=_tls_context()) as response:
         return json.loads(response.read(2 * 1024 * 1024))
 
 
 def select_release(payload, current, package_target):
+    if (not isinstance(payload, dict) or not isinstance(payload.get("assets", []), list)
+            or any(not isinstance(asset, dict) for asset in payload.get("assets", []))):
+        raise UpdateError("GitHub вернул некорректный ответ.")
     tag = payload.get("tag_name")
     latest = version(tag)
     if payload.get("draft") or payload.get("prerelease") or not payload.get("published_at"):
@@ -58,6 +95,9 @@ def select_release(payload, current, package_target):
     name = f"nimbus-{tag.removeprefix('v')}-{package_target}.zip"
     asset = next((a for a in payload.get("assets", []) if a.get("name") == name), None)
     digest = (asset or {}).get("digest", "")
+    if asset and (type(asset.get("size")) is not int or asset["size"] < 0
+                  or digest is not None and not isinstance(digest, str)):
+        raise UpdateError("GitHub вернул некорректный ответ.")
     trusted = bool(re.fullmatch(r"sha256:[0-9a-f]{64}", digest or ""))
     expected_url = f"{RELEASES}/download/{tag}/{name}"
     if asset and asset.get("browser_download_url") != expected_url:
@@ -196,8 +236,8 @@ class Updater:
             return self.status()
         except UpdateError:
             raise
-        except Exception:
-            raise UpdateError("Не удалось проверить обновления. Проверьте соединение и повторите позже.") from None
+        except Exception as error:
+            raise UpdateError("Не удалось проверить обновления. " + _failure_reason(error)) from None
         finally:
             self.lock.release()
 
@@ -218,7 +258,7 @@ class Updater:
             archive = scratch / "package.zip"
             request = urllib.request.Request(asset["browser_download_url"], headers={"User-Agent": "Nimbus-client-updater"})
             total = 0
-            with urllib.request.urlopen(request, timeout=60) as response, archive.open("xb") as output:
+            with urllib.request.urlopen(request, timeout=60, context=_tls_context()) as response, archive.open("xb") as output:
                 while chunk := response.read(1024 * 1024):
                     total += len(chunk)
                     if total > MAX_ARCHIVE or total > asset.get("size", 0):
@@ -251,8 +291,9 @@ class Updater:
             return self.status()
         except UpdateError:
             raise
-        except Exception:
-            raise UpdateError("Не удалось подготовить обновление. Текущая версия и данные сохранены.") from None
+        except Exception as error:
+            raise UpdateError("Не удалось подготовить обновление. " + _failure_reason(error)
+                              + " Текущая версия и данные сохранены.") from None
         finally:
             if scratch:
                 shutil.rmtree(scratch, ignore_errors=True)

@@ -8,6 +8,11 @@ import build
 
 
 class BuildLayoutTests(unittest.TestCase):
+    def test_every_runtime_explicitly_bundles_the_public_tls_trust_store(self):
+        for target in ("linux", "win32", "darwin"):
+            with self.subTest(target=target):
+                self.assertIn("--include-package-data=certifi", build.nuitka_command(target, Path("fixture-output")))
+
     def test_runtime_name_and_launcher_metadata(self):
         for target, binary in [('linux', 'Nimbus-runtime'), ('win32', 'Nimbus-runtime.exe')]:
             with self.subTest(target=target), tempfile.TemporaryDirectory() as folder:
