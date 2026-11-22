@@ -297,9 +297,8 @@ class BatchWorker:
 
     def _run(self) -> None:
         """Рабочий цикл воркера — фоновый daemon-поток."""
-        from curl_cffi import requests
         from . import client_device, proxies
-        session = requests.Session(impersonate=client_device.IMPERSONATE)
+        session = client_device.new_transport_session()
         session.proxies = {"all": proxies.remote_dns(self._proxy)} if self._proxy else {}
         # Binding используется до отправки post. Ответ начатой публикации
         # не разрешает повторный post или смену прокси ради его повтора.

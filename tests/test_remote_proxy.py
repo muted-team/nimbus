@@ -128,6 +128,110 @@ class RemoteProfileProxyTest(unittest.TestCase):
         self.assertIs(self.calls[-1][3]["json"], payload)
         self.assertEqual(remote._profile_negotiated, {})
 
+    def test_camoufox_negotiates_before_protected_action_on_account_route(self):
+        self.health_profile = "camoufox158"
+        payload = {"username": "synthetic.user", "proxy": PROXY}
+        with client_device.use_browser_profile("camoufox158"):
+            result = remote.request("POST", "/v1/login", json=payload, api_key=TOKEN)
+        self.assertEqual(result, RESULT)
+        self.assertEqual(
+            [(route, method, url) for route, method, url, _ in self.calls],
+            [("", "GET", BASE + "/v2/health"),
+             (ROUTE, "GET", BASE + "/v2/health"),
+             (ROUTE, "POST", BASE + "/v2/login")],
+        )
+        for _, _, _, kwargs in self.calls:
+            self.assertIs(kwargs["verify"], True)
+            self.assertEqual(kwargs["headers"]["X-TikTok-Browser-Profile"], "camoufox158")
+            self.assertFalse(kwargs["allow_redirects"])
+            self.assertNotIn("impersonate", kwargs)
+        self.assertIs(self.calls[-1][3]["json"], payload)
+
+    def test_camoufox_old_server_rejection_never_dispatches_a_protected_action(self):
+        for status, echo in ((404, None), (422, None), (200, "firefox155"),
+                             (200, "chrome152"), (200, None), (307, "camoufox158")):
+            with self.subTest(status=status, echo=echo):
+                self.calls.clear()
+                remote._profile_negotiated.clear()
+                remote._direct_off_until = 0.0
+                self.health_status, self.health_profile = status, echo
+                with client_device.use_browser_profile("camoufox158"):
+                    with self.assertRaises(remote.RemoteError) as caught:
+                        remote.request("POST", "/v1/login", json={"proxy": PROXY}, api_key=TOKEN)
+                self.assertTrue(caught.exception.stop_account)
+                self.assertFalse(caught.exception.outcome_unknown)
+                self.assertFalse(caught.exception.network)
+                self.assertEqual({method for _, method, _, _ in self.calls}, {"GET"})
+                self.assertEqual({url for _, _, url, _ in self.calls}, {BASE + "/v2/health"})
+                self.assertEqual(remote._profile_negotiated, {})
+
+    def test_camoufox_preflight_cache_is_not_reused_for_firefox(self):
+        self.direct_blocked = False
+        for profile in ("camoufox158", "firefox155", "camoufox158"):
+            self.health_profile = profile
+            with client_device.use_browser_profile(profile):
+                remote.request("POST", "/v1/login", api_key=TOKEN)
+        self.assertEqual([(method, url) for _, method, url, _ in self.calls],
+                         [("GET", BASE + "/v2/health"), ("POST", BASE + "/v2/login"),
+                          ("GET", BASE + "/v2/health"), ("POST", BASE + "/v2/login"),
+                          ("POST", BASE + "/v2/login")])
+        self.assertEqual(set(remote._profile_negotiated),
+                         {(BASE, "camoufox158"), (BASE, "firefox155")})
+
+    def test_camoufox_sent_action_failure_never_retries_or_changes_route(self):
+        self.health_profile = "camoufox158"
+        original = self.transport
+
+        def sent_failure(route, method, url, kwargs):
+            if method == "POST":
+                self.calls.append((route, method, url, kwargs))
+                raise _CurlError("synthetic response lost after sending", 56)
+            return original(route, method, url, kwargs)
+
+        with client_device.use_browser_profile("camoufox158"), patch.object(
+                self, "transport", side_effect=sent_failure):
+            with self.assertRaises(remote.RemoteError) as caught:
+                remote.request("POST", "/v1/photos/publish", json={"proxy": PROXY}, api_key=TOKEN)
+        self.assertTrue(caught.exception.stop_account)
+        self.assertTrue(caught.exception.outcome_unknown)
+        self.assertFalse(caught.exception.network)
+        posts = [row for row in self.calls if row[1] == "POST"]
+        self.assertEqual(len(posts), 1)
+        self.assertEqual(posts[0][:3], (ROUTE, "POST", BASE + "/v2/photos/publish"))
+        self.assertFalse(posts[0][3]["allow_redirects"])
+
+    def test_camoufox_missing_dispatch_echo_fails_closed_after_one_dispatch(self):
+        self.direct_blocked = False
+        self.health_profile = "camoufox158"
+        original = self.transport
+
+        def missing_echo(route, method, url, kwargs):
+            if method == "POST":
+                self.calls.append((route, method, url, kwargs))
+                return _Response(200, {})
+            return original(route, method, url, kwargs)
+
+        with client_device.use_browser_profile("camoufox158"), patch.object(
+                self, "transport", side_effect=missing_echo):
+            with self.assertRaises(remote.RemoteError) as caught:
+                remote.request("POST", "/v1/logout", api_key=TOKEN)
+        self.assertTrue(caught.exception.stop_account)
+        self.assertTrue(caught.exception.outcome_unknown)
+        self.assertEqual([method for _, method, _, _ in self.calls], ["GET", "POST"])
+
+    def test_camoufox_service_metadata_remains_usable_on_legacy_server(self):
+        def legacy(route, method, url, kwargs):
+            self.calls.append((route, method, url, kwargs))
+            return _Response(200, {})
+
+        with client_device.use_browser_profile("camoufox158"), patch.object(
+                self, "transport", side_effect=legacy):
+            for path in ("/v1/health", "/v1/account", "/v1/history"):
+                self.assertEqual(remote.request("GET", path, api_key=TOKEN), RESULT)
+        self.assertEqual([(method, url) for _, method, url, _ in self.calls],
+                         [("GET", BASE + path) for path in ("/v1/health", "/v1/account", "/v1/history")])
+        self.assertEqual(remote._profile_negotiated, {})
+
     def test_firefox_service_metadata_remains_usable_with_legacy_server(self):
         def legacy(route, method, url, kwargs):
             self.calls.append((route, method, url, kwargs))
@@ -457,6 +561,23 @@ class CloudFailedLoginStateTest(unittest.TestCase):
                 self.assertFalse(kept.exists())
                 self.assertEqual(state.read_text(), "synthetic-stale-auth-state")
                 self.assertTrue(self.sessions.has_session(self.account["username"]))
+
+    def test_wrong_profile_400_preserves_state_without_import_or_login_replay(self):
+        for profile in client_device.BROWSER_PROFILES:
+            with self.subTest(profile=profile), client_device.use_browser_profile(profile):
+                auth = self.sessions.state_file(self.account["username"])
+                kept = self.sessions.device_state_file(self.account["username"])
+                self.seed(auth, "synthetic-intact-wrong-profile")
+                self.seed(kept, "synthetic-kept-device")
+                before = {path: path.read_bytes() for path in (auth, kept)}
+                refusal = remote.RemoteError("synthetic profile mismatch", status=400, stop_account=True)
+                with patch.object(remote, "request", side_effect=refusal) as request:
+                    with self.assertRaises(remote.RemoteError) as caught:
+                        self.cloud._call(self.account["username"], "/v1/studio/counters", {})
+                self.assertEqual(caught.exception.status, 400)
+                self.assertEqual({path: path.read_bytes() for path in before}, before)
+                request.assert_called_once()
+                self.assertEqual(request.call_args.args[1], "/v1/studio/counters")
 
     def test_empty_failed_response_keeps_previous_bytes(self):
         for token in (None, "", "   ", 7, {"synthetic": True}):

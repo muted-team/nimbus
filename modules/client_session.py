@@ -178,9 +178,10 @@ def _safe_filename(username: str) -> str:
 
 def _session_paths(username: str = None):
     if not username:
-        if client_device.IS_FIREFOX:
-            return (paths.here(COOKIES_FILE).with_name("tiktok_cookies.firefox155.json"),
-                    paths.here(LEGACY_COOKIES_FILE).with_name("tiktok_cookies.firefox155.jar"))
+        profile = client_device.browser_profile()
+        if profile != "chrome152":
+            return (paths.here(COOKIES_FILE).with_name(f"tiktok_cookies.{profile}.json"),
+                    paths.here(LEGACY_COOKIES_FILE).with_name(f"tiktok_cookies.{profile}.jar"))
         return paths.here(COOKIES_FILE), paths.here(LEGACY_COOKIES_FILE)
     directory = session_directory()
     directory.mkdir(parents=True, exist_ok=True)
@@ -281,7 +282,8 @@ def sticky_proxy(url: str, username: str, *, device_path=None, lock=None) -> str
 
 def session_directory() -> Path:
     folder = paths.here(SESSIONS_DIR)
-    return folder / "firefox155" if client_device.IS_FIREFOX else folder
+    profile = client_device.browser_profile()
+    return folder if profile == "chrome152" else folder / profile
 
 
 def has_session(username: str) -> bool:

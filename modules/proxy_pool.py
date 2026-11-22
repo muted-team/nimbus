@@ -207,7 +207,6 @@ def _probe(url: str) -> dict:
     (_hello) — SOCKS5 на CONNECT отвечает сбросом, и живой прокси признавался
     бы мёртвым, не дойдя ни до своего типа, ни до запроса.
     Определённый тип тут же уходит в пинг: дальше спрашивать надо на его языке."""
-    from curl_cffi import requests
     from . import client_device, proxies
     entry, _ = proxies.parse_line(url)
     scheme = ""
@@ -224,9 +223,9 @@ def _probe(url: str) -> dict:
     for _ in range(CHECK_TRIES):
         started = time.monotonic()
         try:
-            requests.get(CHECK_URL, proxies={"all": _remote_dns(url)},
-                         timeout=(CONNECT_TIMEOUT, READ_TIMEOUT),
-                         impersonate=client_device.IMPERSONATE)
+            with client_device.new_transport_session() as session:
+                session.get(CHECK_URL, proxies={"all": _remote_dns(url)},
+                            timeout=(CONNECT_TIMEOUT, READ_TIMEOUT))
             # прокси жив — можно спросить страну; на мёртвом смысла нет
             # (второй такой же таймаут), поэтому только здесь, не выше
             country = _maybe_refresh_country(url, entry)
@@ -426,13 +425,11 @@ def _country_probe(url: str) -> str:
     страна необязательна, проверку живости она не роняет.
 
     Поток и обрыв чтения на первом совпадении: страница целиком не читается."""
-    from curl_cffi import requests
     from . import client_device
     try:
-        with requests.Session() as s:
+        with client_device.new_transport_session() as s:
             r = s.get(COUNTRY_URL, stream=True, proxies={"all": _remote_dns(url)},
                        timeout=(CONNECT_TIMEOUT, READ_TIMEOUT),
-                       impersonate=client_device.IMPERSONATE,
                        # Accept навигации — curl_cffi под impersonate, как у Chrome
                        headers=dict(client_device.browser_headers(),
                                     **{"Upgrade-Insecure-Requests": "1"}))
@@ -868,10 +865,9 @@ _rotation_locks = {}
 
 def _exit_ip(url: str) -> str:
     """IP выхода по НОВОМУ соединению; "" — не узнали, None — логин отвергнут."""
-    from curl_cffi import requests
     from . import client_device
     try:
-        with requests.Session(impersonate=client_device.IMPERSONATE) as s:
+        with client_device.new_transport_session() as s:
             s.proxies = {"all": _remote_dns(url)}
             return s.get(IP_URL, timeout=(CONNECT_TIMEOUT, READ_TIMEOUT)).text.strip()
     except Exception as exc:  # noqa: BLE001
@@ -935,10 +931,9 @@ def exit_geo(url: str) -> dict:
         hit = _geo_cache.get(url)
     if hit and now - hit[0] < GEO_TTL_SEC:
         return hit[1]
-    from curl_cffi import requests
     from . import client_device
     try:
-        with requests.Session(impersonate=client_device.IMPERSONATE) as s:
+        with client_device.new_transport_session() as s:
             s.proxies = {"all": _remote_dns(url)}
             d = s.get(GEO_URL, timeout=(CONNECT_TIMEOUT, READ_TIMEOUT)).json()
         # org у ipinfo — «AS7922 Comcast Cable…»: номер сети человеку ни к чему

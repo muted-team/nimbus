@@ -14,6 +14,8 @@ _CHROME_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
               "(KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36")
 _FIREFOX_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:155.0) "
                "Gecko/20100101 Firefox/155.0")
+_CAMOUFOX_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:158.0) "
+                "Gecko/20100101 Firefox/158.0")
 _SPECS = {
     "chrome152": {"UA": _CHROME_UA, "APP_VERSION": _CHROME_UA[len("Mozilla/"):],
                   "IS_FIREFOX": False, "SEC_CH_UA": {
@@ -21,6 +23,8 @@ _SPECS = {
                       "sec-ch-ua-mobile": "?0", "sec-ch-ua-platform": '\"Windows\"'}},
     "firefox155": {"UA": _FIREFOX_UA, "APP_VERSION": "5.0 (Windows)",
                    "IS_FIREFOX": True, "SEC_CH_UA": {}},
+    "camoufox158": {"UA": _CAMOUFOX_UA, "APP_VERSION": "5.0 (Windows)",
+                    "IS_FIREFOX": True, "SEC_CH_UA": {}},
 }
 BROWSER_PROFILES = tuple(_SPECS)
 _browser = contextvars.ContextVar("tiktok_browser_profile", default=None)
@@ -30,14 +34,14 @@ _DEFAULT_PROFILE = os.environ.get("TIKTOK_BROWSER_PROFILE") or config.get("brows
 def browser_profile() -> str:
     name = _browser.get() or _DEFAULT_PROFILE
     if name not in _SPECS:
-        raise ValueError("browser_profile: допустимы chrome152 и firefox155.")
+        raise ValueError("browser_profile: допустимы chrome152, firefox155 и camoufox158.")
     return name
 
 
 @contextlib.contextmanager
 def use_browser_profile(name: str):
     if name not in _SPECS:
-        raise ValueError("browser_profile: допустимы chrome152 и firefox155.")
+        raise ValueError("browser_profile: допустимы chrome152, firefox155 и camoufox158.")
     token = _browser.set(name)
     try:
         yield
@@ -53,6 +57,43 @@ def __getattr__(name):
         value = _SPECS[profile][name]
         return dict(value) if isinstance(value, dict) else value
     raise AttributeError(name)
+
+
+def new_transport_session(**kwargs):
+    """Fresh public HTTP transport; no account reads, signing or service dependency."""
+    from curl_cffi import requests
+    profile = browser_profile()
+    if profile != "camoufox158":
+        return requests.Session(impersonate=profile, **kwargs)
+    from .impersonation import request_kwargs, session_kwargs
+
+    class _CamoufoxSession(requests.Session):
+        def request(self, method, url, **options):
+            method = str(method).upper()
+            headers = requests.Headers(options.get("headers"))
+            pairs = headers.multi_items()
+            effective = requests.Headers(self.headers)
+            effective.update(headers)
+            if method in {"GET", "HEAD"}:
+                sample = ("navigation" if ("sec-fetch-mode" not in effective
+                          or str(effective.get("sec-fetch-mode")).lower() == "navigate") else "fetch-get")
+            else:
+                sample = "fetch-post"
+            measured = request_kwargs(sample, profile="camoufox158")
+            for name, value in measured.pop("headers"):
+                if name == "content-type" and options.get("multipart") is not None:
+                    continue
+                if name not in effective:
+                    pairs.append((name, value))
+            options["headers"] = pairs
+            for name, value in measured.items():
+                options.setdefault(name, value)
+            return super().request(method, url, **options)
+
+    headers = kwargs.pop("headers", {})
+    session = _CamoufoxSession(**session_kwargs("camoufox158"), **kwargs)
+    session.headers.update(headers)
+    return session
 
 
 def fetch_headers(site: str = "same-origin") -> dict:

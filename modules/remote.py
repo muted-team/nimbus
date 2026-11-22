@@ -98,6 +98,7 @@ def _ensure_browser_profile(url: str, profile: str, token: str, proxy: str | Non
         if _profile_negotiated.get(cache_key, 0) > time.monotonic():
             return
     response = _send("GET", url + "/v2/health", proxy=proxy, timeout=TIMEOUT, verify=_verify(url),
+                     allow_redirects=False,
                      headers={"Authorization": f"Bearer {token}",
                               "X-TikTok-Browser-Profile": profile})
     if response.status_code != 200 or response.headers.get("X-TikTok-Browser-Profile") != profile:
@@ -261,6 +262,7 @@ def request(method: str, path: str, params: dict = None, json: dict = None,
     browser_profile = client_device.browser_profile()
     profile_action = not path.startswith("/v3/browser/") and not _registration(path) and not (method.upper() == "GET" and path.rstrip("/") in
                           ("/v1/health", ACCOUNT_PATH, HISTORY_PATH))
+    negotiated_profile = profile_action and browser_profile != "chrome152"
     token = api_key if api_key is not None else key()
     if not token:
         raise RemoteError("ключ не задан")
@@ -283,9 +285,9 @@ def request(method: str, path: str, params: dict = None, json: dict = None,
     while True:
         try:
             url = base()
-            if browser_profile == "firefox155" and profile_action:
+            if negotiated_profile:
                 _ensure_browser_profile(url, browser_profile, token, proxy=proxy)
-            wire_path = "/v2/" + path[len("/v1/"):] if profile_action and browser_profile == "firefox155" and path.startswith("/v1/") else path
+            wire_path = "/v2/" + path[len("/v1/"):] if negotiated_profile and path.startswith("/v1/") else path
             r = _send(method, url + wire_path, proxy=proxy,
                       params=params or {}, json=json, timeout=timeout, verify=_verify(url),
                       **({"allow_redirects": False} if protected else {}),
@@ -338,7 +340,7 @@ def request(method: str, path: str, params: dict = None, json: dict = None,
                           r.status_code, r.status_code >= 500 and not protected,
                           stop_account=protected,
                           outcome_unknown=protected and r.status_code >= 500)
-    if profile_action and browser_profile == "firefox155" and r.headers.get("X-TikTok-Browser-Profile") != browser_profile:
+    if negotiated_profile and r.headers.get("X-TikTok-Browser-Profile") != browser_profile:
         raise RemoteError("сервер не подтвердил профиль браузера", r.status_code,
                           stop_account=protected, outcome_unknown=protected)
     if not isinstance(out, dict):

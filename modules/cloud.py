@@ -437,9 +437,8 @@ def _tos_session(proxy: str):
     """Чистая сессия к хранилищу TikTok через прокси аккаунта — без кук.
     Имя хранилища резолвит прокси (socks5h), как у остальных запросов: наш
     DNS подобрал бы узел под место компьютера, а не под выход прокси."""
-    return requests.Session(impersonate=device.IMPERSONATE,
-                            headers={"User-Agent": device.UA, **device.SEC_CH_UA},
-                            proxies={"all": proxies.remote_dns(proxy)})
+    return device.new_transport_session(headers={"User-Agent": device.UA, **device.SEC_CH_UA},
+                                        proxies={"all": proxies.remote_dns(proxy)})
 
 
 def upload_photos(username: str, proxy: str, blobs: list, sent: list = None) -> list:

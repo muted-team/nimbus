@@ -306,7 +306,7 @@ export interface CampaignStartBody extends CampaignForm {
 }
 
 export type ProxyOnDeath = "swap" | "stop"
-export type BrowserProfile = "chrome152" | "firefox155"
+export type BrowserProfile = "chrome152" | "firefox155" | "camoufox158"
 
 export interface Settings {
   execution_modes?: import("./execution").ExecutionModes

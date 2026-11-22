@@ -403,30 +403,83 @@ def _batch_via_server(names: list, method: str, with_posts: bool,
         if not queue:
             return
         chunk, queue = queue[:FETCH_NOW_MAX], queue[FETCH_NOW_MAX:]
+        known = get_many(chunk)
+        targets, handles = {}, {}
         for name in chunk:
             if on_start:
                 on_start(name)
+            try:
+                handle = _refresh_handle(name, known.get(name) or {}, proxy)
+            except (ProfileError, OSError, sqlite3.Error) as exc:
+                done(name, str(exc))
+                continue
+            known[name] = get(name) or known.get(name) or {}
+            key = handle.casefold()
+            handles.setdefault(key, handle)
+            targets.setdefault(key, []).append(name)
+        if not targets:
+            continue
         try:
-            out = cloud.profiles(chunk, proxy, method, with_posts,
+            out = cloud.profiles(list(handles.values()), proxy, method, with_posts,
                                  min(config.threads(), 16))
         except remote.RemoteError as exc:
-            for name in chunk:
-                done(name, str(exc))
+            for aliases in targets.values():
+                for name in aliases:
+                    done(name, str(exc))
+            continue
+        if (not isinstance(out, dict) or not isinstance(out.get("profiles"), list)
+                or not isinstance(out.get("failed"), list)):
+            for aliases in targets.values():
+                for name in aliases:
+                    done(name, "Сервер не подтвердил результат профиля")
             continue
         for p in out["profiles"]:
-            name = p["username"]
-            save_row(name, p["profile"])
-            if p["posts"] is not None:
-                shadows = {r["item_id"]: r["shadow"] for r in p["posts"]
-                           if r.get("shadow") is not None}
-                save_post_rows(name, [{k: v for k, v in r.items() if k != "shadow"}
-                                      for r in p["posts"]], shadows)
-            _touch(name)
-            if p["avatar_url"]:
-                _avatar_via(name, p["avatar_url"], proxy)
-            done(name)
+            if not isinstance(p, dict) or not isinstance(p.get("username"), str):
+                continue
+            for name in targets.pop(p["username"].casefold(), []):
+                row = p.get("profile")
+                posts = p.get("posts")
+                if (not isinstance(row, dict)
+                        or not isinstance(row.get("user_id"), str)
+                        or not _UID_RE.fullmatch(row["user_id"])
+                        or not isinstance(row.get("unique_id"), str)
+                        or not _USERNAME_RE.fullmatch(row["unique_id"])
+                        or row["unique_id"].casefold() != p["username"].casefold()
+                        or known[name].get("user_id") and row["user_id"] != known[name]["user_id"]):
+                    done(name, "UID или username профиля не подтверждён")
+                    continue
+                if posts is not None and (not isinstance(posts, list) or any(
+                        not isinstance(r, dict) or not isinstance(r.get("item_id"), str)
+                        or not _UID_RE.fullmatch(r["item_id"])
+                        or set(r) - {"username", "fetched_at", "shadow", *post_row({"id": "1"})}
+                        or any(value is not None and not isinstance(value, (str, int, float)) for value in r.values())
+                        for r in posts)):
+                    done(name, "Сервер вернул неверные поля постов")
+                    continue
+                try:
+                    with closing(db.connect()) as conn, conn:
+                        conn.execute("BEGIN IMMEDIATE")
+                        save_row(name, row, conn=conn)
+                        if posts is not None:
+                            shadows = {r["item_id"]: r["shadow"] for r in posts
+                                       if r.get("shadow") is not None}
+                            save_post_rows(name, [{k: v for k, v in r.items() if k != "shadow"}
+                                                  for r in posts], shadows, conn=conn)
+                except (ProfileError, sqlite3.Error, OSError, UnicodeError) as exc:
+                    done(name, str(exc))
+                    continue
+                _touch(name)
+                if isinstance(p.get("avatar_url"), str) and p["avatar_url"]:
+                    _avatar_via(name, p["avatar_url"], proxy)
+                done(name)
         for f in out["failed"]:
-            done(f["username"], f["reason"])
+            if not isinstance(f, dict) or not isinstance(f.get("username"), str):
+                continue
+            for name in targets.pop(f["username"].casefold(), []):
+                done(name, f.get("reason") or "Сервер не подтвердил результат профиля")
+        for aliases in targets.values():
+            for name in aliases:
+                done(name, "Сервер не подтвердил результат профиля")
 
 
 def _avatar_via(name: str, url: str, proxy: str) -> None:
@@ -436,8 +489,7 @@ def _avatar_via(name: str, url: str, proxy: str) -> None:
     if src and src == avatars.stored_source(name):
         return
     try:
-        with crequests.Session(impersonate=device.IMPERSONATE,
-                               proxies={"all": proxies.remote_dns(proxy)}) as s:
+        with device.new_transport_session(proxies={"all": proxies.remote_dns(proxy)}) as s:
             r = s.get(url, timeout=(10, 30))
     except Exception as exc:  # noqa: BLE001 — без аватарки профиль всё равно готов
         print(f"[profile] {name}: аватарка не скачалась — {exc}")
