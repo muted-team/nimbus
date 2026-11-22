@@ -141,6 +141,25 @@ class HttpProfileLifecycleTests(unittest.TestCase):
         self.assertFalse(client_session.rename_jar("synthetic.user", "synthetic.new"))
         self.assertEqual({path: path.read_bytes() for path in targets}, targets)
 
+    def test_fileless_rename_transfers_quarantine_without_claiming_files_moved(self):
+        from modules import profiles
+        profiles.mark_identity_conflict("synthetic.user")
+        marker = profiles.identity_conflict_marker("synthetic.user")
+        self.assertFalse(client_session.rename_jar("synthetic.user", "synthetic.new"))
+        self.assertIs(profiles.identity_conflict_marker("synthetic.new"), marker)
+        self.assertIsNone(profiles.identity_conflict_marker("synthetic.user"))
+
+    def test_fileless_rename_preserves_orphan_state_and_newer_target_quarantine(self):
+        from modules import profiles
+        targets = self.seed("synthetic.new")
+        profiles.mark_identity_conflict("synthetic.user")
+        profiles.mark_identity_conflict("synthetic.new")
+        newer = profiles.identity_conflict_marker("synthetic.new")
+        self.assertFalse(client_session.rename_jar("synthetic.user", "synthetic.new"))
+        self.assertEqual({path: path.read_bytes() for path in targets}, targets)
+        self.assertIs(profiles.identity_conflict_marker("synthetic.new"), newer)
+        self.assertIsNone(profiles.identity_conflict_marker("synthetic.user"))
+
     def test_account_rename_collision_restores_the_shared_registry(self):
         from modules import accounts
         originals = self.seed()

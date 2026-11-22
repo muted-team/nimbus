@@ -365,6 +365,76 @@ class ClientHTTPAcceptance(unittest.TestCase):
         self.assertEqual(profiles.get(alias)["user_id"], "111")
         self.assertEqual(len(self.requests_at("/v2/login")), 3)
 
+    def test_fileless_rename_keeps_process_quarantine_when_sqlite_marker_write_fails(self):
+        from modules import db, purge
+
+        self.stack.enter_context(patch.object(client_device, "_DEFAULT_PROFILE", "camoufox158"))
+        accounts.add_account({"username": USER, "password": "Synthetic-password"})
+        profiles.save_identity(USER, {"user_id": "111", "unique_id": USER})
+        client_session.state_file(USER).write_text("SYNTHETIC_OLD")
+        connect = db.sqlite3.connect
+
+        class DeniedMarkerConnection(db.sqlite3.Connection):
+            def execute(self, statement, *args, **kwargs):
+                if statement.startswith("UPDATE profiles SET method = 'identity_conflict'"):
+                    raise db.sqlite3.OperationalError("Synthetic conflict-marker persistence denied")
+                return super().execute(statement, *args, **kwargs)
+
+        def denied_connect(*args, **kwargs):
+            return connect(*args, factory=DeniedMarkerConnection, **kwargs)
+
+        self.stack.enter_context(patch.object(db.sqlite3, "connect", side_effect=denied_connect))
+        phase = {"uid": "222", "handle": "foreign.qa"}
+
+        def respond(method, path, body):
+            if path.endswith("/posts/delete"):
+                return 200, {"deleted": 0, "failed": [], "total": 0}, {}
+            return 200, {"ok": True, "state": "SYNTHETIC_CONFIRMED", "profile": {
+                "user_id": phase["uid"], "unique_id": phase["handle"]}}, {}
+
+        self.upstream.respond = respond
+        status, conflict = self.api("POST", "/api/login", {"username": USER})
+        self.assertEqual(status, 200, conflict)
+        self.assertTrue(conflict["identity_conflict"])
+        marker = profiles.identity_conflict_marker(USER)
+        with contextlib.closing(db.connect()) as conn:
+            self.assertNotEqual(conn.execute("SELECT method FROM profiles WHERE username = ?", (USER,)).fetchone()[0],
+                                "identity_conflict")
+        self.assertEqual(self.api("POST", "/api/accounts/clear-session", {"username": USER, "new_device": True})[0], 200)
+        self.assertTrue(all(not file.exists() for file in client_session._account_files(USER)))
+        renamed = "fileless.qa"
+        self.assertEqual(self.api("POST", "/api/accounts/update", {"username": USER, "patch": {"username": renamed}})[0], 200)
+        self.assertIs(profiles.identity_conflict_marker(renamed), marker)
+        phase.update(uid="111", handle=renamed)
+        status, login = self.api("POST", "/api/login", {"username": renamed})
+        self.assertEqual(status, 200, login)
+        self.assertTrue(login["ok"])
+        finished = threading.Event()
+        run_purge = purge.run_manual
+
+        def tracked_purge(*args):
+            try:
+                with paths.use_root(self.root), client_device.use_browser_profile("camoufox158"):
+                    run_purge(*args)
+            finally:
+                finished.set()
+
+        with patch.object(purge, "run_manual", side_effect=tracked_purge):
+            self.assertEqual(self.api("POST", "/api/accounts/purge", {"username": renamed, "count": -1})[0], 202)
+            self.assertTrue(finished.wait(4))
+        with contextlib.suppress(remote.RemoteError):
+            cloud.delete_posts(renamed, "", count="all")
+        self.assertEqual(self.requests_at("/v2/posts/delete"), [], "Clearing all files must not detach alias quarantine")
+        self.assertTrue(login.get("identity_conflict"))
+        self.assertTrue(login.get("stop_account"))
+        self.assertFalse(profiles.identity_conflict(USER))
+        self.assertEqual(self.api("POST", "/api/accounts", {"username": USER, "password": "Synthetic-password"})[0], 200)
+        phase.update(handle=USER)
+        fresh = self.api("POST", "/api/login", {"username": USER})[1]
+        self.assertTrue(fresh["ok"])
+        self.assertFalse(fresh.get("stop_account", False))
+        self.assertTrue(profiles.identity_conflict(renamed))
+
     def test_obsolete_readback_cannot_quarantine_a_readded_account(self):
         self.stack.enter_context(patch.object(client_device, "_DEFAULT_PROFILE", "camoufox158"))
         account = {"username": USER, "password": "Synthetic-password"}

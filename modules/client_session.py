@@ -380,9 +380,7 @@ def rename_jar(old: str, new: str) -> bool:
             except FileNotFoundError:
                 continue
             moves.append((source, target))
-        if not moves:
-            return False
-        for target in new_paths:
+        for target in new_paths if moves else ():
             try:
                 target.stat()
             except FileNotFoundError:
@@ -399,7 +397,7 @@ def rename_jar(old: str, new: str) -> bool:
                 marker = profiles._identity_conflicts.pop((database, old), None)
                 if marker is not None:
                     profiles._identity_conflicts.setdefault((database, new), marker)
-            return True
+            return bool(moves)
         except OSError as exc:
             for source, target in reversed(moved):
                 target.replace(source)
