@@ -425,12 +425,9 @@ def _country_probe(url: str) -> str:
     не узнали (сеть, WAF, поле не нашлось). Наружу исключения не пускает —
     страна необязательна, проверку живости она не роняет.
 
-    Приём — как у прогрева анонимной личности (modules/profiles.py,
-    _warm_once): поток и обрыв чтения на первом совпадении, страница целиком
-    не читается. Там это асинхронно (httpx-подобная сессия curl_cffi), здесь
-    синхронно — вся проверка живости синхронная."""
+    Поток и обрыв чтения на первом совпадении: страница целиком не читается."""
     from curl_cffi import requests
-    from . import client_device, profiles  # region-регекс — тот же, что у _warm_once
+    from . import client_device
     try:
         with requests.Session() as s:
             r = s.get(COUNTRY_URL, stream=True, proxies={"all": _remote_dns(url)},
@@ -443,7 +440,7 @@ def _country_probe(url: str) -> str:
                 buf = ""
                 for chunk in r.iter_content():
                     buf += chunk.decode("utf-8", "ignore")
-                    m = profiles._REGION_RE.search(buf)
+                    m = re.search(r'"region"\s*:\s*"([A-Z]{2})"', buf)
                     if m:
                         return m.group(1)
                     if len(buf) > COUNTRY_MAX_BYTES:
