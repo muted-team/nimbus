@@ -1,4 +1,5 @@
 import { copyWithToast } from "@/lib/native"
+import type { Account } from "@/api/types"
 
 import { COPY_LABEL } from "./labels"
 
@@ -9,7 +10,13 @@ import { COPY_LABEL } from "./labels"
    В буфер уходят только юзернеймы: пароли, коды 2FA и почты рядом с ними не
    попадают. */
 
-export const atUsername = (username: string) => `@${username}`
+export const atUsername = (username: string) => username.includes("@") ? username : `@${username}`
+
+export function accountUsername(account: Pick<Account, "username" | "profile">): string {
+  if (account.profile?.identity_conflict) return ""
+  const handle = account.profile?.unique_id || account.username
+  return /^[A-Za-z0-9_.]{1,64}$/.test(handle) ? handle : ""
+}
 
 /* Выделенные в порядке строк списка: сперва видимые, следом скрытые срезом
    или поиском. Скрытые тоже идут в буфер: счётчик панели и соседние действия
@@ -36,6 +43,7 @@ export const usernamesText = (usernames: string[]) => usernames.map(atUsername).
 /** Копирует юзернеймы и подтверждает тостом: буфера человек не видит, а
     молчание после нажатия читается как сбой. */
 export async function copyUsernames(usernames: string[]): Promise<void> {
+  if (!usernames.length) return
   await copyWithToast(
     usernamesText(usernames),
     usernames.length === 1 ? COPY_LABEL.toastOne : COPY_LABEL.toastMany(usernames.length)

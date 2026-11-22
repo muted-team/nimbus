@@ -2,10 +2,11 @@
 
 import contextlib
 from pathlib import Path
+import socket
 import tempfile
 import unittest
 from unittest.mock import patch
-from modules import cloud, remote, paths, client_session, client_device
+from modules import accounts, cloud, config, profiles, remote, paths, client_session, client_device
 
 
 class ProfileClientTests(unittest.TestCase):
@@ -14,6 +15,8 @@ class ProfileClientTests(unittest.TestCase):
         self.addCleanup(stack.close)
         self.root = Path(stack.enter_context(tempfile.TemporaryDirectory()))
         stack.enter_context(paths.use_root(self.root))
+        stack.enter_context(patch.object(config, "get", side_effect=lambda key, default=None: default))
+        stack.enter_context(patch.object(socket.socket, "connect", side_effect=AssertionError("network denied")))
         stack.enter_context(client_device.use_browser_profile("firefox155"))
         file = client_session.state_file("synthetic.profile")
         file.parent.mkdir(parents=True, exist_ok=True)
@@ -68,6 +71,13 @@ class ProfileClientTests(unittest.TestCase):
             client_session.state_file("synthetic.profile").read_text(), "KEPT"
         )
 
+    def test_top_level_state_failure_stops_profile_readback_before_cache_merge(self):
+        self.request.return_value = {"state_saved": False, "data": {
+            "verdict": "observed", "before": {"user_id": "123", "unique_id": "new_name", "nickname": "other"}}}
+        result = cloud.profile_info("synthetic.profile", "http://fixture.invalid")
+        self.assertTrue(result.get("stop_account"))
+        self.assertIs(result.get("state_saved"), False)
+
 
 class ProfileBridgeTests(unittest.TestCase):
     def setUp(self):
@@ -78,6 +88,9 @@ class ProfileBridgeTests(unittest.TestCase):
         self.addCleanup(stack.close)
         self.root = Path(stack.enter_context(tempfile.TemporaryDirectory()))
         stack.enter_context(paths.use_root(self.root))
+        stack.enter_context(patch.object(config, "get", side_effect=lambda key, default=None: default))
+        stack.enter_context(patch.object(socket.socket, "connect", side_effect=AssertionError("network denied")))
+        stack.enter_context(patch.object(remote.requests.Session, "request", side_effect=AssertionError("HTTP denied")))
         self.u = "synthetic.bridge"
         self.account = {
             "username": self.u,
@@ -180,6 +193,100 @@ class ProfileBridgeTests(unittest.TestCase):
         self.bridge.update(self.u, {"nickname": "Весна 🌷"}, "123", True)
         self.assertEqual(self.send.call_args.args[2]["nickname"], "Весна 🌷")
         self.assertEqual(self.bridge._read(self.u)["result"]["verdict"], "blocked")
+
+    def test_existing_email_alias_info_populates_sqlite_without_renaming_login(self):
+        alias = "profile@example.invalid"
+        accounts.add_accounts_bulk(alias + ":synthetic-password")
+        self.account["username"] = alias
+        registry = paths.here(accounts.ACCOUNTS_FILE).read_bytes()
+        try:
+            info = self.bridge.info(alias)
+        except ValueError as exc:
+            self.fail(f"existing email login must be accepted: {exc}")
+        self.read.assert_called_once_with(alias, "http://fixture.invalid")
+        self.assertEqual(profiles.get(alias)["user_id"], info["before"]["user_id"])
+        self.assertEqual(profiles.get(alias)["unique_id"], "new_name")
+        self.assertEqual(paths.here(accounts.ACCOUNTS_FILE).read_bytes(), registry)
+        self.assertIsNone(profiles.get("new_name"))
+
+    def test_unconfirmed_info_does_not_populate_or_replace_cached_identity(self):
+        identity = {"user_id": "123", "unique_id": "kept_name", "nickname": "kept"}
+        profiles.save_identity(self.u, identity)
+        before = profiles.get(self.u)
+        for flags in ({"state_saved": False}, {"stop_account": True}, {"verdict": "unknown"},
+                      {"before": {"user_id": "999", "unique_id": "new_name", "nickname": "other"}},
+                      {"before": {"user_id": "123", "unique_id": "bad/name", "nickname": "other"}}):
+            self.read.return_value = {"verdict": "observed", "before": {
+                "user_id": "123", "unique_id": "new_name", "nickname": "other"}, **flags}
+            with self.subTest(flags=flags):
+                with self.assertRaises(ValueError):
+                    self.bridge.info(self.u)
+                self.assertEqual(profiles.get(self.u), before)
+
+    def test_info_cache_failure_keeps_confirmed_readback_usable(self):
+        with patch.object(profiles, "save_identity", side_effect=profiles.sqlite3.OperationalError("fixture disk")):
+            try:
+                result = self.bridge.info(self.u)
+            except profiles.sqlite3.Error as exc:
+                self.fail(f"cache failure must not discard a confirmed readback: {exc}")
+        self.assertEqual(result["verdict"], "observed")
+        self.assertFalse(result["profile_saved"])
+        self.read.assert_called_once()
+
+    def test_profile_alias_validation_rejects_unknown_email_and_paths_before_requests(self):
+        for name in ("unknown@example.invalid", "../known@example.invalid", "known\\a@example.invalid",
+                     "known\x00@example.invalid", "../synthetic.bridge", "synthetic.bridge\n"):
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                self.bridge.info(name)
+        self.read.assert_not_called()
+
+    def test_confirmed_same_uid_update_merges_identity_into_existing_sqlite_profile(self):
+        alias = "profile@example.invalid"
+        accounts.add_accounts_bulk(alias + ":synthetic-password")
+        self.account["username"] = alias
+        profiles.save_row(alias, {"user_id": "123", "unique_id": "old_name", "nickname": "kept",
+                                  "followers": 42, "method": "ssr"})
+        profiles.save_posts(alias, [{"id": "5001", "desc": "kept post"}])
+        before = profiles.get(alias)
+        response = {"verdict": "confirmed", "before": {"user_id": "123"},
+                    "after": {"user_id": "123", "unique_id": "new_name", "nickname": "Весна 🌷"},
+                    "confirmed_fields": ["unique_id"], "platform_verified": True}
+        self.send.return_value = response
+        result = self.bridge.update(alias, {"unique_id": "new_name"}, "123", True)
+        self.assertEqual(result, response)
+        self.assertEqual(profiles.get(alias), {**before, "unique_id": "new_name", "nickname": "Весна 🌷"})
+        self.assertEqual(profiles.posts_of(alias)[0]["item_id"], "5001")
+        self.send.assert_called_once()
+        self.assertEqual(self.send.call_args.args[0], alias)
+        self.assertIsNone(profiles.get("new_name"))
+
+    def test_uncertain_rejected_or_wrong_uid_update_never_changes_cached_identity(self):
+        identity = {"user_id": "123", "unique_id": "kept_name", "nickname": "kept"}
+        profiles.save_identity(self.u, identity)
+        before = profiles.get(self.u)
+        confirmed = {"verdict": "confirmed", "before": {"user_id": "123"},
+                     "after": {"user_id": "123", "unique_id": "new_name", "nickname": "other"},
+                     "confirmed_fields": ["unique_id"], "platform_verified": True}
+        for flags in ({"verdict": "unknown"}, {"verdict": "rejected"}, {"state_saved": False},
+                      {"stop_account": True}, {"after": {"user_id": "999", "unique_id": "new_name", "nickname": "other"}},
+                      {"platform_verified": False}, {"confirmed_fields": []},
+                      {"steps": [{"verdict": "unknown"}]}):
+            self.send.return_value = {**confirmed, **flags}
+            with self.subTest(flags=flags):
+                self.bridge._save(self.u, {"reconciled": True})
+                self.bridge.update(self.u, {"unique_id": "new_name"}, "123", True)
+                self.assertEqual(profiles.get(self.u), before)
+
+    def test_confirmed_update_cache_failure_does_not_become_an_unknown_mutation(self):
+        self.send.return_value = {"verdict": "confirmed", "before": {"user_id": "123"},
+            "after": {"user_id": "123", "unique_id": "new_name", "nickname": "other"},
+            "confirmed_fields": ["unique_id"], "platform_verified": True}
+        with patch.object(profiles, "save_identity", side_effect=profiles.sqlite3.OperationalError("fixture disk")):
+            result = self.bridge.update(self.u, {"unique_id": "new_name"}, "123", True)
+        self.assertEqual(result["verdict"], "confirmed")
+        self.assertFalse(result["profile_saved"])
+        self.assertFalse(self.bridge._requires_readback(self.bridge._read(self.u)))
+        self.send.assert_called_once()
 
 
 if __name__ == "__main__":

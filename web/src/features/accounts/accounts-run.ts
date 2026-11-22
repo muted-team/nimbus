@@ -3,6 +3,7 @@ import { create } from "zustand"
 
 import {
   PURGE_POLL_MS,
+  applyProfileRows,
   deleteAccount,
   loadPurgeStatus,
   loginAccount,
@@ -146,6 +147,7 @@ export function startRun(
   const state: Omit<AccountsRun, "stopping"> & {
     failed: { username: string; reason: string }[]
     banned: { username: string; reason: string }[]
+    warnings: { username: string; reason: string }[]
     campStopped: boolean
   } = {
     kind,
@@ -155,6 +157,7 @@ export function startRun(
     current: [],
     failed: [],
     banned: [],
+    warnings: [],
     campStopped: false,
   }
   const commit = () =>
@@ -259,6 +262,8 @@ export function startRun(
               reason: res.reason || t("аккаунта нет"),
             })
           else fail(username, res.reason || "")
+          if (res.ok && res.warning) state.warnings.push({ username, reason: res.warning })
+          if (res.identity_conflict) applyProfileRows({ [username]: { identity_conflict: true } }, undefined)
         } else if (kind === "clearSession") {
           await clearAccountSession(username, opts.newDevice)
           state.ok += 1
@@ -364,8 +369,9 @@ export function startRun(
         ? [RUN_TOAST.bannedLine(state.banned.map((b) => b.username))]
         : []),
       ...state.failed.map((f) => RUN_TOAST.failLine(f.username, f.reason)),
+      ...state.warnings.map((w) => `${w.username}: ${w.reason}`),
     ]
-    const bad = state.failed.length + state.banned.length
+    const bad = state.failed.length + state.banned.length + state.warnings.length
     const [head, ...rest] = lines
     if (!bad) notify.ok(head)
     else if (!state.ok) notify.error(head, undefined, { lines: rest })

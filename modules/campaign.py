@@ -817,6 +817,10 @@ def _worker_run(acc, slots, caption, title, min_delay_ms, max_delay_ms,
             # пишет в ленту сам. Вход арендует прокси из СВОЕЙ группы; аренду
             # публикации сюда не передаём, иначе разделение групп теряет смысл.
             ok = signin.run(username, tee=False)
+            if ok and signin.last_warning().get("stop_account"):
+                _pause_account(username)
+                _fail_account(username, signin.last_warning()["warning"], processed_counter)
+                return
             if not ok:
                 _pause_account(username)
                 # НЕ останавливаем кампанию — пропускаем аккаунт: одна
@@ -933,7 +937,7 @@ def _worker_run(acc, slots, caption, title, min_delay_ms, max_delay_ms,
             _worker_set(username, "login")
 
             print("[campaign] %s: ни одного поста — проверяю аккаунт входом" % username)
-            if not signin.run(username, tee=False):
+            if not signin.run(username, tee=False) or signin.last_warning().get("stop_account"):
                 _pause_account(username)
             if signin.last_banned():
                 reason = signin.last_reason() or "аккаунт больше не работает"

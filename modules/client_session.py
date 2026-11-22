@@ -382,6 +382,12 @@ def rename_jar(old: str, new: str) -> bool:
             moves.append((source, target))
         if not moves:
             return False
+        for target in new_paths:
+            try:
+                target.stat()
+            except FileNotFoundError:
+                continue
+            raise FileExistsError("состояние нового имени уже существует — переименование остановлено")
         moved = []
         try:
             for source, target in moves:

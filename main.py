@@ -1685,11 +1685,13 @@ class Handler(BaseHTTPRequestHandler):
             from modules import signin as login_impl
             ok = login_impl.run(username, tee=False)  # stdout сервера, не захват
             if ok:
-                try:
-                    config.update({"default_account": username})
-                except OSError:
-                    pass  # не критично — просто следующий publish возьмёт старый default_account
-                self._json({"ok": True, "username": username})
+                warning = login_impl.last_warning()
+                if not warning.get("stop_account"):
+                    try:
+                        config.update({"default_account": username})
+                    except OSError:
+                        pass  # не критично — просто следующий publish возьмёт старый default_account
+                self._json({"ok": True, "username": username, **warning})
             else:
                 reason = login_impl.last_reason()
                 # аккаунт удалён/забанен у TikTok или приостановлен (вход дал

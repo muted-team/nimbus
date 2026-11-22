@@ -93,7 +93,7 @@ import {
   FILTER_LABEL,
   HEAD_ACTION,
 } from "./labels"
-import { copyUsernames, selectedUsernames } from "./username"
+import { accountUsername, copyUsernames, selectedUsernames } from "./username"
 
 /* Экран аккаунтов: таблица во всю ширину со срезами-вкладками, поиском,
    сортировкой и выбором колонок; выбор строк флажками, массовые действия
@@ -296,8 +296,9 @@ export default function AccountsPage() {
      действия, — иначе после смены среза копировалось бы меньше обещанного.
      Видимые строки идут в порядке экрана, скрытые срезом или поиском — следом. */
   const pickedNames = useMemo(
-    () => selectedUsernames(selected, usernames, chosenNames),
-    [selected, usernames, chosenNames]
+    () => selectedUsernames(selected, usernames, chosenNames)
+      .map((alias) => accountUsername(accounts.find((a) => a.username === alias)!)).filter(Boolean),
+    [selected, usernames, chosenNames, accounts]
   )
 
   /* ── действия ─────────────────────────────────────────────────────── */
@@ -381,8 +382,16 @@ export default function AccountsPage() {
     publish: (username) => void launch([username]),
     refresh: (username) => refreshProfiles([username]),
     login: (username) => startRun("login", [username], 1),
-    open: (username) => void openExternal(tiktokProfileUrl(username)),
-    copy: (username) => void copyUsernames([username]),
+    open: (username) => {
+      const account = accounts.find((a) => a.username === username)
+      const handle = account && accountUsername(account)
+      if (handle) void openExternal(tiktokProfileUrl(handle))
+    },
+    copy: (username) => {
+      const account = accounts.find((a) => a.username === username)
+      const handle = account && accountUsername(account)
+      if (handle) void copyUsernames([handle])
+    },
     edit: (username) => setEditing(username),
     purge: async (username) => {
       const ok = await confirmDestructive({
@@ -791,7 +800,7 @@ export default function AccountsPage() {
                 <DropdownMenu>
                   <Hint label={ACCOUNTS_LABEL.columns}>
                     <DropdownMenuTrigger
-                      render={<Button variant="outline" size="icon" aria-label={ACCOUNTS_LABEL.columns} className="hidden md:inline-flex" />}
+                      render={<Button variant="outline" size="icon" aria-label={ACCOUNTS_LABEL.columns} />}
                     >
                       <Columns3Icon />
                     </DropdownMenuTrigger>
@@ -803,7 +812,7 @@ export default function AccountsPage() {
                         <DropdownMenuCheckboxItem
                           key={c.key}
                           checked={!hidden.has(c.key)}
-                          disabled={c.tier > tier}
+                          disabled={!c.defaultHidden && c.tier > tier}
                           onCheckedChange={() => toggleColumn(c.key)}
                         >
                           {c.label}

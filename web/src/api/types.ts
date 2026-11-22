@@ -8,11 +8,16 @@ export interface ProfilePosts {
 }
 
 export interface Profile {
+  /** Подтверждённый UID и TikTok username; ключ аккаунта остаётся логином. */
+  user_id?: string | null
+  unique_id?: string | null
+  identity_conflict?: boolean
   /** имя профиля, если оно отличается от логина */
   nickname?: string | null
   verified?: boolean | null
   private_account?: boolean | null
   followers?: number | null
+  following?: number | null
   likes?: number | null
   posts?: ProfilePosts
   /** unix-время последнего обновления профиля, секунды */
@@ -39,6 +44,7 @@ export interface StudioCounters {
 export type StudioCountersMap = Record<string, StudioCounters>
 
 export interface Account {
+  /** Исходный логин (в том числе email), ключ API и сохранённой сессии. */
   username: string
   has_session: boolean
   has_totp: boolean
@@ -115,6 +121,10 @@ export interface LoginResponse {
   username: string
   reason?: string
   banned?: boolean
+  warning?: string
+  profile_saved?: boolean
+  identity_conflict?: boolean
+  stop_account?: boolean
 }
 
 export interface ProfilesStatus {

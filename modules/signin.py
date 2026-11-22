@@ -60,6 +60,10 @@ def last_reason() -> str:
     return getattr(_reason_tls, "text", "")
 
 
+def last_warning() -> dict:
+    return dict(getattr(_reason_tls, "warning", {}))
+
+
 def last_network() -> bool:
     """Последний вход сорвался на сети; это диагностика, не разрешение повтора.
 
@@ -85,6 +89,7 @@ def _set_reason(text: str, network: bool = False, banned=None) -> None:
     _reason_tls.text = text or ""
     _reason_tls.network = network
     _reason_tls.ban_code = banned or None
+    _reason_tls.warning = {}
 
 
 def attempt_via_server(acc, proxy, account_name) -> bool:
@@ -123,6 +128,9 @@ def attempt_via_server(acc, proxy, account_name) -> bool:
         proxy_pool.report_ok(proxy)
     ban = out.get("ban_code") if out.get("banned") else None
     _set_reason(out.get("reason") or "", network, ban if ban in BANNED_CODES else None)
+    if out.get("ok") and out.get("warning"):
+        _reason_tls.warning = {key: out[key] for key in
+                               ("warning", "profile_saved", "identity_conflict", "stop_account") if key in out}
     return bool(out.get("ok"))
 
 
@@ -164,7 +172,9 @@ def run(name=None, tee=True, proxy=None) -> bool:
         if held is not None:
             held.release()
     if ok:
-        eventlog.say("вход выполнен", "ok", account_name, "login")
+        warning = last_warning().get("warning")
+        eventlog.say("вход подтверждён: " + warning if warning else "вход выполнен",
+                     "warn" if warning else "ok", account_name, "login")
     else:
         eventlog.say("вход не удался: %s" % (last_reason() or "причина неизвестна"),
                      "err", account_name, "login")

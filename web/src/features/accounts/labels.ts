@@ -18,9 +18,16 @@ export const FILTER_LABEL = localize({
 
 /* Заголовки колонок: они же подписи к числам в строке на узком экране. */
 export const COLUMN_LABEL = localize({
-  name: "Аккаунт",
+  avatar: "Аватар",
+  name: "TikTok username",
+  nickname: "Отображаемое имя",
+  login: "Логин",
+  user_id: "UID",
   region: "Страна",
   followers: "Подписчики",
+  following: "Подписки",
+  verified: "Галочка",
+  private: "Закрытый",
   likes: "Лайки",
   views: "Просмотры",
   posts: "Посты",

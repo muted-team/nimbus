@@ -109,6 +109,16 @@ def list_accounts() -> list:
 
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def is_email_login(username) -> bool:
+    """An exact saved email alias, never an arbitrary path or unknown address."""
+    return (isinstance(username, str) and len(username) <= 254
+            and bool(_EMAIL_RE.fullmatch(username))
+            and not re.search(r"[/\\\x00-\x1f\x7f]", username)
+            and _exists(username))
+
+
 _B32_RE = re.compile(r"^([A-Z2-7]+|[a-z2-7]+)$")   # base32 в одном регистре
 # Длины 2FA-секрета: base32 от ключа стандартного размера — 80, 128, 160 и
 # 256 бит. Промежуточных не бывает, и это единственный надёжный признак:

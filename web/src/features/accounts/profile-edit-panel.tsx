@@ -33,6 +33,7 @@ import {
   profileOutcome,
   usernameStepText,
 } from "./profile-edit-result"
+import { accountUsername, atUsername } from "./username"
 
 const RESULT_LABEL: Record<string, string> = {
   confirmed: "Изменения подтверждены повторным чтением",
@@ -251,7 +252,7 @@ export function ProfileEditPanel({
       <SheetContent className="gap-0">
         <SheetHeader>
           <SheetTitle>
-            {t("Профиль TikTok")} · @{account.username}
+            {t("Профиль TikTok")} · {atUsername(info?.before.unique_id || accountUsername(account) || account.username)}
           </SheetTitle>
           <SheetDescription>
             {t(

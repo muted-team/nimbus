@@ -37,7 +37,7 @@ import { AccountActionItems } from "./action-items"
 import { accountAction, actionContext, type AccountActionKey, type AccountRowActions } from "./actions"
 import { ACCOUNT_ACTION, CARD_LABEL, COLUMN_LABEL, HAS_EMAIL, HAS_TOTP, PRIVATE, VERIFIED } from "./labels"
 import { rowNumbers } from "./studio"
-import { atUsername } from "./username"
+import { accountUsername, atUsername } from "./username"
 
 /* Карточка аккаунта сбоку: всё, что в строке таблицы не поместилось, без
    ухода со страницы. Профиль и метки (галочка, закрытый, чем входит), числа
@@ -109,6 +109,7 @@ function SheetBody({
   useLanguage()
   const u = account.username
   const p = account.profile
+  const handle = accountUsername(account)
   const studio = counters?.[u]
   const numbers = rowNumbers(account, counters)
   const ctx = actionContext([account], { locked, busy })
@@ -131,7 +132,7 @@ function SheetBody({
     [COLUMN_LABEL.shadow, p?.posts?.shadow],
     [CARD_LABEL.visitors, numbers.visitors],
     [CARD_LABEL.privatePosts, studio?.private_posts],
-    [CARD_LABEL.following, studio?.following],
+    [CARD_LABEL.following, studio?.following ?? p?.following],
   ]
 
   const login = accountAction("login")
@@ -142,23 +143,25 @@ function SheetBody({
       <SheetHeader className="gap-3 border-b p-4 pr-12">
         <div className="flex items-center gap-3">
           <Avatar className="size-12 shrink-0">
-            {avatar ? <AvatarImage src={avatar} alt="" /> : null}
+            {avatar && !p?.identity_conflict ? <AvatarImage src={avatar} alt="" /> : null}
             <AvatarFallback>
               <UserRoundIcon className="size-5 text-muted-foreground" />
             </AvatarFallback>
           </Avatar>
           <div className="min-w-0 flex-1">
-            <SheetTitle className="truncate select-text">{atUsername(u)}</SheetTitle>
+            <SheetTitle className="truncate select-text">{p?.identity_conflict ? `${COLUMN_LABEL.login}: ${u}` : atUsername(handle || u)}</SheetTitle>
             <SheetDescription className="flex items-center gap-2 truncate">
               {p?.nickname ? <span className="truncate">{p.nickname}</span> : null}
               {account.region ? <Flag code={account.region} /> : null}
             </SheetDescription>
+            {handle && handle !== u ? <p className="truncate text-xs text-muted-foreground select-text">{COLUMN_LABEL.login}: {u}</p> : null}
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <StatusBadge tone={account.has_session ? "ok" : "warn"}>
             {account.has_session ? CARD_LABEL.session : CARD_LABEL.noSession}
           </StatusBadge>
+          {p?.identity_conflict ? <StatusBadge tone="warn">{t("Конфликт UID")}</StatusBadge> : null}
           {marks.map((m) => (
             <span key={m.text} className="inline-flex items-center gap-1 text-xs text-muted-foreground">
               <m.icon className={cn("size-3.5", m.tone)} />

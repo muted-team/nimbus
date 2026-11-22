@@ -12,7 +12,7 @@ import { AccountRow, type RowHandlers } from "./account-row"
 import type { SelectionTarget } from "./actions"
 import type { Column } from "./columns"
 import type { SortDir, SortKey } from "./filter"
-import { COLUMN_LABEL, SELECT_LABEL } from "./labels"
+import { SELECT_LABEL } from "./labels"
 
 /* Таблица аккаунтов: липкая шапка с флажком «выбрать все» и сортировкой,
    виртуализованный список. Шапка живёт внутри области прокрутки — так её
@@ -75,7 +75,7 @@ export function AccountsTable({
     count: accounts.length,
     getScrollElement: () => scrollRef.current,
     // на телефоне строка выше: под логином там строка с числами
-    estimateSize: () => (columns.length ? 40 : 49),
+    estimateSize: () => (columns.some((c) => c.tier > 0) ? 40 : 49),
     overscan: 12,
     scrollMargin: headH,
   })
@@ -89,12 +89,12 @@ export function AccountsTable({
   const all = picked > 0 && picked === accounts.length
 
   return (
-    <div ref={scrollRef} role="table" aria-rowcount={accounts.length} className="min-h-0 flex-1 overflow-y-auto">
+    <div ref={scrollRef} role="table" aria-rowcount={accounts.length} className="min-h-0 w-full min-w-0 flex-1 overflow-auto">
       <div
         ref={headRef}
         role="row"
         style={{ gridTemplateColumns: template }}
-        className="sticky top-0 z-10 grid w-full items-center gap-x-3 border-b bg-background px-4 py-1 md:px-6 text-xs text-muted-foreground"
+        className="sticky top-0 z-10 grid min-w-full w-max items-center gap-x-3 border-b bg-background px-4 py-1 md:px-6 text-xs text-muted-foreground"
       >
         <div className="flex items-center" role="columnheader">
           <Checkbox
@@ -104,9 +104,8 @@ export function AccountsTable({
             onCheckedChange={() => onPickAll(!all)}
           />
         </div>
-        <SortButton label={COLUMN_LABEL.name} column="name" sort={sort} dir={dir} onSort={onSort} />
         {columns.map((c) => (
-          <SortButton
+          c.key === "avatar" ? <div key={c.key} role="columnheader">{c.label}</div> : <SortButton
             key={c.key}
             label={c.label}
             column={c.key}

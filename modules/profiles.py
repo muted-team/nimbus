@@ -1,17 +1,19 @@
 """Local profile storage and queued requests to the Nimbus service."""
 # -*- coding: utf-8 -*-
 import asyncio
+import hashlib
 import json
 import re
 import sqlite3
 import threading
 import time
-from contextlib import closing
+from contextlib import closing, nullcontext
 
 from curl_cffi import requests as crequests
 
 from . import config
 from . import db
+from . import paths
 from . import client_device as device
 from . import proxies
 from . import proxy_pool
@@ -39,6 +41,15 @@ class ProfileIdentityError(ProfileError):
     попадают — сессия в них не виновата, и прогревать её заново из-за них
     незачем. Наружу разницы нет: подкласс ProfileError, main.py так
     же отвечает 409 с человеческим текстом."""
+
+
+class ProfileUIDConflict(ProfileIdentityError):
+    """Confirmed session and cached profile belong to different accounts."""
+
+
+IDENTITY_CONFLICT = ("Вход подтверждён, но UID сессии не совпадает с сохранённым профилем. "
+                     "Обработка аккаунта остановлена; прежние данные сохранены.")
+_identity_conflicts = set()  # Keep the stop even if SQLite cannot persist its marker.
 
 
 class ProfileNetworkError(ProfileError):
@@ -151,17 +162,97 @@ def save(username: str, info: dict, method: str) -> None:
     save_row(username, profile_row(info, method))
 
 
-def save_row(username: str, row: dict) -> None:
-    """Готовая строка профиля (profile_row) — в таблицу profiles."""
-    row = dict(row, username=username, fetched_at=int(time.time()))
+def save_identity(username: str, identity: dict) -> None:
+    """Merge confirmed nonsecret fields without replacing cached statistics."""
+    if not isinstance(identity, dict):
+        raise ProfileIdentityError("Сервер не подтвердил UID и username аккаунта")
+    uid, name = identity.get("user_id"), identity.get("unique_id")
+    if isinstance(uid, str) and _UID_RE.fullmatch(uid):
+        require_uid(username, uid)
+    if (not isinstance(uid, str) or not _UID_RE.fullmatch(uid)
+            or not isinstance(name, str) or not _USERNAME_RE.fullmatch(name)
+            or any(identity.get(field) is not None and not isinstance(identity[field], str)
+                   for field in ("sec_uid", "nickname"))):
+        raise ProfileIdentityError("Сервер не подтвердил UID и username аккаунта")
+    row = {"user_id": uid, "unique_id": name}
+    for field in ("sec_uid", "nickname"):
+        if isinstance(identity.get(field), str):
+            row[field] = identity[field]
+    try:
+        for value in row.values():
+            value.encode("utf-8")
+    except UnicodeError:
+        raise ProfileIdentityError("Сервер вернул неверный текст профиля") from None
     cols = list(row)
     with closing(db.connect()) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        previous = conn.execute("SELECT user_id FROM profiles WHERE username = ?",
+                                (username,)).fetchone()
+        if previous and previous[0] and previous[0] != uid:
+            raise ProfileUIDConflict("UID аккаунта не совпадает с сохранённым профилем")
+        conn.execute(
+            f"INSERT INTO profiles (username, method, fetched_at, {', '.join(cols)})"
+            f" VALUES (?, 'account', ?, {', '.join('?' * len(cols))})"
+            " ON CONFLICT(username) DO UPDATE SET "
+            + ", ".join(f"{c} = excluded.{c}" for c in cols),
+            [username, int(time.time()), *row.values()])
+        conn.commit()
+    _touch(username)
+
+
+def mark_identity_conflict(username: str) -> None:
+    _identity_conflicts.add((paths.here(db.DB_FILE), username))
+    try:
+        with closing(db.connect()) as conn:
+            conn.execute("UPDATE profiles SET method = 'identity_conflict' WHERE username = ?", (username,))
+            conn.commit()
+    except (sqlite3.Error, OSError):
+        pass  # The next session check revalidates UID after a process restart.
+    _touch(username)
+
+
+def identity_conflict(username: str) -> bool:
+    if (paths.here(db.DB_FILE), username) in _identity_conflicts:
+        return True
+    with closing(db.connect()) as conn:
+        row = conn.execute("SELECT method FROM profiles WHERE username = ?", (username,)).fetchone()
+    return bool(row and row[0] == "identity_conflict")
+
+
+def require_uid(username: str, uid: str) -> None:
+    if (paths.here(db.DB_FILE), username) in _identity_conflicts:
+        raise ProfileUIDConflict(IDENTITY_CONFLICT)
+    with closing(db.connect()) as conn:
+        row = conn.execute("SELECT user_id, method FROM profiles WHERE username = ?", (username,)).fetchone()
+    if row and (row[1] == "identity_conflict" or row[0] and row[0] != uid):
+        raise ProfileUIDConflict(IDENTITY_CONFLICT)
+
+
+def save_row(username: str, row: dict, conn=None) -> None:
+    """Готовая строка профиля (profile_row) — в таблицу profiles."""
+    if (not isinstance(row, dict)
+            or set(row) - {"username", "fetched_at", *profile_row({}, METHOD)}
+            or any(value is not None and not isinstance(value, (str, int, float)) for value in row.values())):
+        raise ProfileError("Сервер вернул неверные поля профиля")
+    row = dict(row, username=username, fetched_at=int(time.time()))
+    cols = list(row)
+    own = conn is None
+    with closing(db.connect()) if own else nullcontext(conn) as conn:
+        if own:
+            conn.execute("BEGIN IMMEDIATE")
+        previous = conn.execute("SELECT user_id, method FROM profiles WHERE username = ?", (username,)).fetchone()
+        if ((paths.here(db.DB_FILE), username) in _identity_conflicts
+                or previous and previous[1] == "identity_conflict"):
+            raise ProfileUIDConflict(IDENTITY_CONFLICT)
+        if previous and previous[0] and row.get("user_id") and previous[0] != row["user_id"]:
+            raise ProfileIdentityError("UID аккаунта не совпадает с сохранённым профилем")
         conn.execute(
             f"INSERT INTO profiles ({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))})"
             " ON CONFLICT(username) DO UPDATE SET "
             + ", ".join(f"{c} = excluded.{c}" for c in cols if c != "username"),
             [row[c] for c in cols])
-        conn.commit()
+        if own:
+            conn.commit()
 
 
 def save_posts(username: str, items: list, shadows: dict = None) -> None:
@@ -172,25 +263,36 @@ def save_posts(username: str, items: list, shadows: dict = None) -> None:
     save_post_rows(username, [post_row(it) for it in items], shadows)
 
 
-def save_post_rows(username: str, rows: list, shadows: dict = None) -> None:
+def save_post_rows(username: str, rows: list, shadows: dict = None, conn=None) -> None:
     """Готовые строки постов (post_row) — как save_posts."""
     now = int(time.time())
     shadows = shadows or {}
-    rows = [dict(r, username=username, fetched_at=now) for r in rows]
-    with closing(db.connect()) as conn:
-        known = dict(conn.execute(
-            "SELECT item_id, shadow FROM posts WHERE username = ?", (username,)))
+    fields = tuple(post_row({"id": "1"}))
+    rows = [{**{key: r.get(key) for key in fields}, "username": username, "fetched_at": now} for r in rows]
+    own = conn is None
+    with closing(db.connect()) if own else nullcontext(conn) as conn:
+        known = {_post_id(item_id): shadow for item_id, shadow in conn.execute(
+            "SELECT item_id, shadow FROM posts WHERE username = ?", (username,))}
         for r in rows:
             r["shadow"] = _bool(shadows[r["item_id"]]) if r["item_id"] in shadows \
                 else known.get(r["item_id"])
         conn.execute("DELETE FROM posts WHERE username = ?", (username,))
+        for r in rows:
+            if conn.execute("SELECT 1 FROM posts WHERE item_id = ?", (r["item_id"],)).fetchone():
+                # Existing schema has a global PK; a second alias must not steal its posts.
+                item_id = r["item_id"]
+                candidate = f"{hashlib.sha256(username.encode()).hexdigest()}/{item_id}"
+                while conn.execute("SELECT 1 FROM posts WHERE item_id = ?", (candidate,)).fetchone():
+                    candidate = "_" + candidate
+                r["item_id"] = candidate
         if rows:
             cols = list(rows[0])
             conn.executemany(
                 f"INSERT OR REPLACE INTO posts ({', '.join(cols)})"
                 f" VALUES ({', '.join('?' * len(cols))})",
                 [[r[c] for c in cols] for r in rows])
-        conn.commit()
+        if own:
+            conn.commit()
 
 
 def forget_recent(username: str, count: int) -> None:
@@ -220,9 +322,12 @@ def save_shadows(username: str, shadows: dict) -> None:
     if not shadows:
         return
     with closing(db.connect()) as conn:
+        stored = {_post_id(item_id): item_id for item_id, in conn.execute(
+            "SELECT item_id FROM posts WHERE username = ?", (username,))}
         conn.executemany(
             "UPDATE posts SET shadow = ? WHERE username = ? AND item_id = ?",
-            [(_bool(flag), username, item_id) for item_id, flag in shadows.items()])
+            [(_bool(flag), username, stored[item_id]) for item_id, flag in shadows.items()
+             if item_id in stored])
         conn.commit()
 
 
@@ -234,10 +339,13 @@ def _profile_json(row) -> dict:
     """Строка profiles (+ суммы постов из запроса) -> JSON для API: флаги
     булевы, неизвестное (поля только ssr у способа detail) — null."""
     r = dict(row)
+    if r["method"] == "identity_conflict" or (paths.here(db.DB_FILE), r["username"]) in _identity_conflicts:
+        return {"username": r["username"], "identity_conflict": True}
     return {
         "username": r["username"],
         "user_id": r["user_id"],
         "sec_uid": r["sec_uid"],
+        "unique_id": r["unique_id"],
         "nickname": r["nickname"],
         "signature": r["signature"],
         "verified": _bool_or_none(r["verified"]),
@@ -317,8 +425,16 @@ def list_all() -> list:
     return [_profile_json(r) for r in rows]
 
 
+def _post_id(stored: str) -> str:
+    return stored.rsplit("/", 1)[-1]
+
+
 def posts_of(username: str) -> list:
     """Посты аккаунта из базы (JSON API), новые первыми."""
+    profile = get(username) or {}
+    if profile.get("identity_conflict"):
+        return []
+    handle = profile.get("unique_id") or username
     try:
         with closing(db.connect()) as conn:
             conn.row_factory = sqlite3.Row
@@ -331,9 +447,10 @@ def posts_of(username: str) -> list:
     out = []
     for r in rows:
         d = dict(r)
+        d["item_id"] = _post_id(d["item_id"])
         d["is_photo"] = bool(d["is_photo"])
         d["shadow"] = _bool_or_none(d["shadow"])
-        d["url"] = f"{SITE}/@{username}/{'photo' if d['is_photo'] else 'video'}/{d['item_id']}"
+        d["url"] = f"{SITE}/@{handle}/{'photo' if d['is_photo'] else 'video'}/{d['item_id']}"
         out.append(d)
     return out
 
@@ -349,10 +466,12 @@ def summaries() -> dict:
 FETCH_NOW_MAX = 50
 
 _USERNAME_RE = re.compile(r"^[A-Za-z0-9_.]{1,64}$")
+_UID_RE = re.compile(r"[1-9][0-9]{0,63}")
 
 
 def clean_usernames(usernames) -> list:
-    """Юзернеймы без @ и пробелов, без повторов; неверный — ProfileError."""
+    """Public handles or exact saved email aliases, without duplicates."""
+    from . import accounts
     if isinstance(usernames, str):
         usernames = [usernames]
     if not isinstance(usernames, (list, tuple)):
@@ -360,7 +479,7 @@ def clean_usernames(usernames) -> list:
     out = []
     for n in usernames:
         name = str(n or "").strip().lstrip("@")
-        if not _USERNAME_RE.match(name):
+        if not _USERNAME_RE.fullmatch(name) and not accounts.is_email_login(name):
             raise ProfileInputError(f"неверный юзернейм {n!r}")
         if name not in out:
             out.append(name)
@@ -380,6 +499,26 @@ def _run_batch(names: list, method: str, with_posts: bool,
                on_start=None, on_done=None, more=None) -> None:
     """Пачка профилей: собирает наш сервер (modules/cloud.py)."""
     _batch_via_server(names, method, with_posts, on_start, on_done, more)
+
+
+def _refresh_handle(name: str, cached: dict, proxy: str) -> str:
+    from . import accounts, client_session, cloud
+    if cached.get("identity_conflict"):
+        raise ProfileUIDConflict(IDENTITY_CONFLICT)
+    handle = cached.get("unique_id") or name
+    if isinstance(handle, str) and _USERNAME_RE.fullmatch(handle):
+        return handle
+    if not accounts.is_email_login(name) or not client_session.has_session(name):
+        raise ProfileIdentityError("TikTok username аккаунта ещё не подтверждён")
+    checked = cloud.session_check(name, proxy)
+    if (checked.get("alive") is not True or checked.get("stop_account")
+            or checked.get("verdict") == "unknown"):
+        raise ProfileIdentityError(checked.get("error") or "Владелец сессии не подтверждён")
+    uid = checked.get("uid")
+    identity = {"user_id": str(uid) if type(uid) in (str, int) else None,
+                "unique_id": checked.get("username")}
+    save_identity(name, identity)
+    return identity["unique_id"]
 
 
 def _batch_via_server(names: list, method: str, with_posts: bool,

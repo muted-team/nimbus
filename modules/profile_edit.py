@@ -5,9 +5,8 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import re
 import threading
-from . import accounts, cloud, paths, proxy_pool, remote
+from . import accounts, cloud, paths, profiles, proxy_pool, remote
 
 _ROOT = Path(__file__).resolve().parents[1] / "profile-edits"
 _lock = threading.RLock()
@@ -55,9 +54,8 @@ def _save(username, row):
 
 @contextlib.contextmanager
 def _proxy(username):
-    if not isinstance(username, str) or not re.fullmatch(
-        r"[A-Za-z0-9_.]{2,64}", username
-    ):
+    if (not isinstance(username, str)
+            or not profiles._USERNAME_RE.fullmatch(username) and not accounts.is_email_login(username)):
         raise ValueError("Выберите аккаунт")
     account = accounts.load_account(username)
     retained = account.get("registration_proxy")
@@ -79,14 +77,24 @@ def info(username):
         before = result.get("before")
         if (
             result.get("verdict") != "observed"
+            or result.get("state_saved") is False
+            or result.get("stop_account") is True
             or not isinstance(before, dict)
             or not all(
                 isinstance(before.get(field), str)
                 for field in ("nickname", "unique_id")
             )
-            or not re.fullmatch(r"[1-9][0-9]{0,31}", str(before.get("user_id") or ""))
+            or not isinstance(before.get("user_id"), str)
+            or not profiles._UID_RE.fullmatch(before["user_id"])
+            or not profiles._USERNAME_RE.fullmatch(before["unique_id"])
         ):
             raise ValueError("Сервер не подтвердил владельца профиля")
+        try:
+            profiles.save_identity(username, before)
+        except profiles.ProfileError as exc:
+            raise ValueError(str(exc)) from None
+        except (profiles.sqlite3.Error, OSError):
+            result = dict(result, profile_saved=False)
         previous = _read(username)
         if previous:
             if previous.get("expected_uid") == str(before["user_id"]):
@@ -169,9 +177,7 @@ def update(username, changes, expected_uid, acknowledge=False):
         "avatar_data",
     }:
         raise ValueError("Неизвестные поля профиля")
-    if not isinstance(expected_uid, str) or not re.fullmatch(
-        r"[1-9][0-9]{0,31}", expected_uid
-    ):
+    if not isinstance(expected_uid, str) or not profiles._UID_RE.fullmatch(expected_uid):
         raise ValueError("Сначала прочитайте профиль")
     if type(acknowledge) is not bool:
         raise ValueError("Подтвердите ограничения смены имени")
@@ -231,5 +237,11 @@ def update(username, changes, expected_uid, acknowledge=False):
             else:
                 result = row["result"]
         row["result"] = result
+        if result.get("verdict") in ("confirmed", "partial", "noop") and not _requires_readback(row):
+            identity = result.get("before") if result["verdict"] == "noop" else result.get("after")
+            try:
+                profiles.save_identity(username, identity)
+            except (profiles.ProfileError, OSError, profiles.sqlite3.Error):
+                result = row["result"] = dict(result, profile_saved=False)
         _save(username, row)
         return result

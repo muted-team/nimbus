@@ -2,7 +2,7 @@ import { create } from "zustand"
 
 import { pick, prune, type PickMode } from "@/lib/selection"
 
-import type { ColumnKey } from "./columns"
+import { COLUMNS, type ColumnKey } from "./columns"
 import { defaultDir, type AccountsFilter, type SortDir, type SortKey } from "./filter"
 
 /* Контракт экрана: открытый срез списка, порядок строк, поиск и выделение —
@@ -16,16 +16,18 @@ import { defaultDir, type AccountsFilter, type SortDir, type SortKey } from "./f
 const STORE_KEY = "accounts.view"
 
 const FILTERS: AccountsFilter[] = ["ready", "all", "nologin", "shadow", "banned"]
-const SORT_KEYS: SortKey[] = ["name", "region", "followers", "likes", "views", "posts", "shadow", "fetched"]
+const SORT_KEYS = COLUMNS.map((c) => c.key).filter((key): key is SortKey => key !== "avatar")
 
 interface SavedView {
+  /** Отличает новый набор от прежнего списка, где дополнительных полей не было. */
+  columns?: number
   filter: AccountsFilter
   sort: SortKey
   dir: SortDir
   hidden: ColumnKey[]
 }
 
-const DEFAULTS: SavedView = { filter: "ready", sort: "name", dir: "asc", hidden: [] }
+const DEFAULTS: SavedView = { filter: "ready", sort: "name", dir: "asc", hidden: COLUMNS.filter((c) => c.defaultHidden).map((c) => c.key) }
 
 /* Хранилище может быть недоступно (приватное окно, запрет на данные сайта) —
    тогда просто работаем с настройками по умолчанию. */
@@ -39,7 +41,10 @@ function loadView(): SavedView {
       sort: SORT_KEYS.includes(saved.sort!) ? saved.sort! : DEFAULTS.sort,
       dir: saved.dir === "asc" || saved.dir === "desc" ? saved.dir : DEFAULTS.dir,
       hidden: Array.isArray(saved.hidden)
-        ? (saved.hidden as string[]).filter((k): k is ColumnKey => k !== "name" && (SORT_KEYS as string[]).includes(k))
+        ? [...new Set([
+          ...(saved.hidden as string[]).filter((k): k is ColumnKey => COLUMNS.some((c) => c.key === k)),
+          ...(saved.columns === 1 ? [] : DEFAULTS.hidden),
+        ])]
         : DEFAULTS.hidden,
     }
   } catch {
@@ -49,7 +54,7 @@ function loadView(): SavedView {
 
 function saveView(view: SavedView) {
   try {
-    window.localStorage.setItem(STORE_KEY, JSON.stringify(view))
+    window.localStorage.setItem(STORE_KEY, JSON.stringify({ ...view, columns: 1 }))
   } catch {
     // не сохранилось — вид просто не переживёт перезапуск
   }

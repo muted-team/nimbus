@@ -1,6 +1,7 @@
 import type { Account, BannedAccount, StudioCountersMap } from "@/api/types"
 
 import { rowNumbers } from "./studio"
+import { accountUsername } from "./username"
 
 /* Срезы списка аккаунтов и порядок строк.
 
@@ -17,7 +18,7 @@ export function inShadow(a: Account): boolean {
 
 /** Готов к работе: вход сохранён и постов в тени нет. */
 export function isReady(a: Account): boolean {
-  return a.has_session && !inShadow(a)
+  return a.has_session && !inShadow(a) && !a.profile?.identity_conflict
 }
 
 export function filterAccounts(accounts: Account[], filter: AccountsFilter): Account[] {
@@ -37,14 +38,15 @@ export function filterAccounts(accounts: Account[], filter: AccountsFilter): Acc
 
 /** Поиск по логину и стране: регистр не важен, пустой запрос — всё как есть.
     У страны бывает null (сессии нет) — такие строки просто не совпадают. */
-export function searchByName<T extends { username: string; region?: string | null }>(
+export function searchByName<T extends { username: string; region?: string | null; profile?: Account["profile"] }>(
   items: T[],
   query: string
 ): T[] {
   const q = query.trim().toLowerCase()
   if (!q) return items
   return items.filter(
-    (it) => it.username.toLowerCase().includes(q) || (it.region?.toLowerCase().includes(q) ?? false)
+    (it) => [it.username, it.profile?.unique_id, it.profile?.nickname, it.region]
+      .some((value) => value?.toLowerCase().includes(q))
   )
 }
 
@@ -65,6 +67,12 @@ export function filterCounts(
 
 export type SortKey =
   | "name"
+  | "nickname"
+  | "login"
+  | "user_id"
+  | "following"
+  | "verified"
+  | "private"
   | "region"
   | "followers"
   | "likes"
@@ -81,6 +89,12 @@ function sortValue(a: Account, key: SortKey, counters?: StudioCountersMap): numb
   const p = a.profile
   const numbers = rowNumbers(a, counters)
   switch (key) {
+    case "following":
+      return counters?.[a.username]?.following ?? p?.following ?? null
+    case "verified":
+      return p?.verified == null ? null : Number(p.verified)
+    case "private":
+      return p?.private_account == null ? null : Number(p.private_account)
     case "followers":
       return numbers.followers
     case "likes":
@@ -102,7 +116,7 @@ function sortValue(a: Account, key: SortKey, counters?: StudioCountersMap): numb
    по умолчанию числа идут по убыванию, а логин и страна — по возрастанию
    (страна — код из букв, а не величина, там естественен алфавит). */
 export const defaultDir = (key: SortKey): SortDir =>
-  key === "name" || key === "region" ? "asc" : "desc"
+  ["name", "nickname", "login", "user_id", "region"].includes(key) ? "asc" : "desc"
 
 /* «Неизвестно» не участвует в гонке: такая строка внизу при любом направлении,
    а при равенстве (или паре неизвестных) порядок решает логин. Приём общий и
@@ -124,8 +138,12 @@ export function sortAccounts(
 ): Account[] {
   const sign = dir === "asc" ? 1 : -1
   return [...accounts].sort((a, b) => {
-    const byName = () => a.username.localeCompare(b.username, "ru")
-    if (key === "name") return byName() * sign
+    const byName = () => accountUsername(a).localeCompare(accountUsername(b), "ru") || a.username.localeCompare(b.username, "ru")
+    const text = (a: Account) => key === "name" ? accountUsername(a) || null
+      : key === "nickname" ? a.profile?.nickname || null
+      : key === "user_id" ? a.profile?.user_id || null : a.username
+    if (["name", "nickname", "login", "user_id"].includes(key))
+      return compareKnown(text(a), text(b), (x, y) => x.localeCompare(y, "ru", { numeric: key === "user_id" }), sign) ?? byName()
     if (key === "region") {
       return compareKnown(a.region, b.region, (x, y) => x.localeCompare(y), sign) ?? byName()
     }

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 
 import { COPY_LABEL } from "./labels"
-import { atUsername, selectedUsernames, usernamesText } from "./username"
+import { accountUsername, atUsername, selectedUsernames, usernamesText } from "./username"
 
 /* Что уходит в буфер: юзернейм — с собакой, как он выглядит в TikTok, а
    выделенные — столбиком, по одному в строке. Паролей, кодов 2FA и почт
@@ -11,6 +11,19 @@ describe("юзернейм в буфере", () => {
   it("копируется с собакой", () => {
     expect(atUsername("kate")).toBe("@kate")
     expect(usernamesText(["kate"])).toBe("@kate")
+  })
+
+  it("email остаётся логином, а TikTok username берётся из профиля", () => {
+    const alias = "fixture@example.invalid"
+    expect(atUsername(alias)).toBe(alias)
+    expect(accountUsername({ username: alias, profile: { unique_id: "real.profile" } })).toBe("real.profile")
+    expect(accountUsername({ username: alias, profile: null })).toBe("")
+    expect(accountUsername({ username: "legacy.handle", profile: null })).toBe("legacy.handle")
+    expect(accountUsername({ username: alias, profile: { unique_id: "bad/handle" } })).toBe("")
+  })
+
+  it("UID conflict never falls back to an old handle-shaped login", () => {
+    expect(accountUsername({ username: "old.handle", profile: { identity_conflict: true } })).toBe("")
   })
 
   it("выделенные идут столбиком в порядке строк списка", () => {

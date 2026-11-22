@@ -1,4 +1,4 @@
-import { useLanguage } from "@/lib/i18n"
+import { t, useLanguage } from "@/lib/i18n"
 import { memo, useState } from "react"
 import { EllipsisIcon, EyeIcon, EyeOffIcon, HeartIcon, UserRoundIcon, UsersRoundIcon, VideoIcon, type LucideIcon } from "lucide-react"
 
@@ -32,7 +32,7 @@ import { accountAction, actionContext, ROW_ACTIONS, SELECTION_ACTIONS, type Acco
 import type { Column, ColumnKey } from "./columns"
 import { ACCOUNT_ACTION, COLUMN_LABEL, SELECT_LABEL } from "./labels"
 import { rowNumbers, type RowNumbers } from "./studio"
-import { atUsername } from "./username"
+import { accountUsername, atUsername } from "./username"
 
 /* Вход в строке — тот же пункт общего списка, что и в панели над выделением:
    и подпись, и значок, и доступность берутся из actions.tsx. */
@@ -97,6 +97,8 @@ export const AccountRow = memo(function AccountRow({
   const shadowColumn = columns.some((c) => c.key === "shadow")
   const { actions } = handlers
   const u = account.username
+  const handle = accountUsername(account) || u
+  const narrow = !columns.some((c) => c.tier > 0)
 
   /* Какое меню откроет правый клик, решается в его момент: групповое — только
      когда выделено больше одного и кликнули по строке из этого выделения. */
@@ -104,8 +106,32 @@ export const AccountRow = memo(function AccountRow({
   const press = usePressOrigin()
 
   const cell: Record<ColumnKey, React.ReactNode> = {
+    avatar: <Avatar className="size-7 shrink-0">
+      {avatar && !p?.identity_conflict ? <AvatarImage src={avatar} alt="" /> : null}
+      <AvatarFallback><UserRoundIcon className="size-3.5 text-muted-foreground" /></AvatarFallback>
+    </Avatar>,
+    name: <div className="min-w-0 flex-1">
+      <div className="flex min-w-0 items-center gap-2">
+        <span className="truncate font-medium select-text">{accountUsername(account) ? atUsername(handle) : "—"}</span>
+        {p?.identity_conflict ? <span className="shrink-0 text-xs text-warning">{t("Конфликт UID")}</span> : null}
+        {busy ? <Spinner className="size-3.5 shrink-0 text-primary" /> : null}
+        {shadow && !shadowColumn ? (
+          <span className={cn("inline-flex shrink-0 items-center gap-1 text-xs", toneText.warn)}>
+            <EyeOffIcon className="size-3.5" aria-label={COLUMN_LABEL.shadow} />
+            <span className="tabular">{fmtCompact(shadow)}</span>
+          </span>
+        ) : null}
+      </div>
+      {narrow ? <NarrowStats account={account} numbers={numbers} /> : null}
+    </div>,
+    nickname: <span className="truncate select-text">{p?.nickname || "—"}</span>,
+    login: <span className="truncate select-text">{u}</span>,
+    user_id: <span className="truncate tabular select-text">{p?.user_id || "—"}</span>,
     region: <Flag code={account.region} />,
     followers: <Num value={numbers.followers} />,
+    following: <Num value={counters?.[u]?.following ?? p?.following} />,
+    verified: <span>{p?.verified == null ? "—" : t(p.verified ? "Да" : "Нет")}</span>,
+    private: <span>{p?.private_account == null ? "—" : t(p.private_account ? "Да" : "Нет")}</span>,
     likes: <Num value={p?.likes} />,
     views: <Num value={p?.posts?.views} />,
     posts: <Num value={numbers.posts} />,
@@ -152,7 +178,7 @@ export const AccountRow = memo(function AccountRow({
         <div className="flex items-center" role="gridcell">
           <Checkbox
             checked={selected}
-            aria-label={SELECT_LABEL.pick(atUsername(u))}
+            aria-label={SELECT_LABEL.pick(atUsername(handle))}
             onClick={(e) => {
               e.stopPropagation()
               e.preventDefault()
@@ -161,36 +187,12 @@ export const AccountRow = memo(function AccountRow({
           />
         </div>
 
-        {/* аккаунт */}
-        <div className="flex min-w-0 items-center gap-2" role="gridcell">
-          <Avatar className="size-7 shrink-0">
-            {avatar ? <AvatarImage src={avatar} alt="" /> : null}
-            <AvatarFallback>
-              <UserRoundIcon className="size-3.5 text-muted-foreground" />
-            </AvatarFallback>
-          </Avatar>
-          <div className="min-w-0 flex-1">
-            <div className="flex min-w-0 items-center gap-2">
-              <span className="truncate font-medium select-text">{atUsername(u)}</span>
-              {/* аккаунтом заняты — спиннер рядом с логином: аватар остаётся,
-                  строку по-прежнему узнаёшь в лицо */}
-              {busy ? <Spinner className="size-3.5 shrink-0 text-primary" /> : null}
-              {shadow && !shadowColumn ? (
-                <span className={cn("inline-flex shrink-0 items-center gap-1 text-xs", toneText.warn)}>
-                  <EyeOffIcon className="size-3.5" aria-label={COLUMN_LABEL.shadow} />
-                  <span className="tabular">{fmtCompact(shadow)}</span>
-                </span>
-              ) : null}
-            </div>
-            {columns.length ? null : <NarrowStats account={account} numbers={numbers} />}
-          </div>
-        </div>
-
         {columns.map((c) => (
           <div
             key={c.key}
             role="gridcell"
-            className={cn("flex min-w-0 items-center", c.align === "end" ? "justify-end" : "justify-center")}
+            data-column={c.key}
+            className={cn("flex min-w-0 items-center", c.align === "end" ? "justify-end" : c.align === "center" ? "justify-center" : undefined)}
           >
             {cell[c.key]}
           </div>

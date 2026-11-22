@@ -46,6 +46,10 @@ describe("срезы списка", () => {
     expect(filterAccounts(list, "ready").map((a) => a.username)).toEqual(["clean", "checked"])
   })
 
+  it("a confirmed session with a UID conflict is not ready to publish", () => {
+    expect(isReady(acc("fixture@example.invalid", { profile: { identity_conflict: true } }))).toBe(false)
+  })
+
   it("«Все» — весь живой список, забаненных здесь нет", () => {
     expect(filterAccounts(list, "all")).toHaveLength(5)
   })
@@ -81,6 +85,13 @@ describe("срезы списка", () => {
     expect(searchByName(list, "  ")).toHaveLength(5)
   })
 
+  it("поиск находит реальный TikTok username и имя, не заменяя email ключ", () => {
+    const accounts = [acc("fixture@example.invalid", { profile: { unique_id: "real.profile", nickname: "Весна 🌷" } })]
+    expect(searchByName(accounts, "REAL.PRO").map((a) => a.username)).toEqual(["fixture@example.invalid"])
+    expect(searchByName(accounts, "Весна").map((a) => a.username)).toEqual(["fixture@example.invalid"])
+    expect(searchByName(accounts, "fixture@").map((a) => a.username)).toEqual(["fixture@example.invalid"])
+  })
+
   it("поиск задевает и страну аккаунта", () => {
     const withRegions = [acc("us1", { region: "US" }), acc("de1", { region: "DE" }), acc("noregion")]
     expect(searchByName(withRegions, "US").map((a) => a.username)).toEqual(["us1"])
@@ -102,6 +113,33 @@ describe("порядок строк", () => {
     const list = [acc("b"), acc("a")]
     sortAccounts(list, "name", "asc")
     expect(byName(list)).toEqual(["b", "a"])
+  })
+
+  it("TikTok username сортируется по реальному handle, пустой email-профиль всегда внизу", () => {
+    const list = [acc("a@example.invalid", { profile: { unique_id: "zed" } }),
+      acc("z@example.invalid", { profile: { unique_id: "amy" } }), acc("missing@example.invalid")]
+    expect(byName(sortAccounts(list, "name", "asc"))).toEqual(["z@example.invalid", "a@example.invalid", "missing@example.invalid"])
+    expect(byName(sortAccounts(list, "name", "desc"))).toEqual(["a@example.invalid", "z@example.invalid", "missing@example.invalid"])
+  })
+
+  it("отдельные имя, логин, UID и подписки сортируются по показанным значениям", () => {
+    const list = [acc("a@example.invalid", { profile: { nickname: "Zed", user_id: "100", following: 1 } }),
+      acc("z@example.invalid", { profile: { nickname: "Amy", user_id: "9", following: 5 } }), acc("missing@example.invalid")]
+    expect(byName(sortAccounts(list, "nickname", "asc"))).toEqual(["z@example.invalid", "a@example.invalid", "missing@example.invalid"])
+    expect(byName(sortAccounts(list, "login", "asc"))).toEqual(["a@example.invalid", "missing@example.invalid", "z@example.invalid"])
+    expect(byName(sortAccounts(list, "user_id", "asc"))).toEqual(["z@example.invalid", "a@example.invalid", "missing@example.invalid"])
+    expect(byName(sortAccounts(list, "following", "desc", { "a@example.invalid": { following: 10 } }))).toEqual([
+      "a@example.invalid", "z@example.invalid", "missing@example.invalid",
+    ])
+  })
+
+  it("false — известный флаг, null — неизвестный и всегда внизу", () => {
+    const list = [acc("yes", { profile: { verified: true, private_account: true } }),
+      acc("no", { profile: { verified: false, private_account: false } }), acc("missing")]
+    for (const key of ["verified", "private"] as const) {
+      expect(byName(sortAccounts(list, key, "asc"))).toEqual(["no", "yes", "missing"])
+      expect(byName(sortAccounts(list, key, "desc"))).toEqual(["yes", "no", "missing"])
+    }
   })
 
   it("«неизвестно» всегда внизу — и по возрастанию, и по убыванию", () => {

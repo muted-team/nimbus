@@ -8,12 +8,13 @@ vi.mock("@/api/accounts", () => ({
   purgeAccount: vi.fn(),
   refreshAccounts: vi.fn(),
   refreshAccountsSoon: vi.fn(),
+  applyProfileRows: vi.fn(),
 }))
 vi.mock("@/lib/notify", () => ({
   notify: { ok: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }))
 
-import { loadPurgeStatus, loginAccount, purgeAccount } from "@/api/accounts"
+import { applyProfileRows, loadPurgeStatus, loginAccount, purgeAccount } from "@/api/accounts"
 import type { LoginResponse } from "@/api/types"
 import { notify } from "@/lib/notify"
 import { startRun, useAccountsRun } from "./accounts-run"
@@ -69,4 +70,30 @@ it("исчезнувшая без результата чистка не счи�
   expect(notify.error).toHaveBeenCalledWith(expect.any(String), undefined, {
     lines: [expect.stringContaining("результат очистки не получен")],
   })
+})
+
+it("UID conflict remains a confirmed login with a warning, not a failed-login retry prompt", async () => {
+  vi.mocked(loginAccount).mockResolvedValue({ ok: true, username: "fixture-one", profile_saved: false,
+    identity_conflict: true, stop_account: true,
+    warning: "Вход подтверждён, но UID сессии не совпадает. Обработка остановлена." })
+  startRun("login", ["fixture-one"])
+  await vi.waitFor(() => expect(useAccountsRun.getState().run).toBeNull())
+  expect(loginAccount).toHaveBeenCalledTimes(1)
+  expect(notify.warn).toHaveBeenCalledWith(expect.stringContaining("вошли 1 из 1"), {
+    lines: [expect.stringContaining("UID")],
+  })
+  expect(notify.error).not.toHaveBeenCalled()
+  expect(notify.ok).not.toHaveBeenCalled()
+  expect(applyProfileRows).toHaveBeenCalledWith({ "fixture-one": { identity_conflict: true } }, undefined)
+})
+
+it("disk-cache warning does not quarantine a confirmed login or repeat it", async () => {
+  vi.mocked(loginAccount).mockResolvedValue({ ok: true, username: "fixture-one", profile_saved: false,
+    warning: "Вход подтверждён, но профиль не сохранён локально. Повторный вход не нужен." })
+  startRun("login", ["fixture-one"])
+  await vi.waitFor(() => expect(useAccountsRun.getState().run).toBeNull())
+  expect(loginAccount).toHaveBeenCalledTimes(1)
+  expect(notify.warn).toHaveBeenCalled()
+  expect(notify.error).not.toHaveBeenCalled()
+  expect(applyProfileRows).not.toHaveBeenCalled()
 })
