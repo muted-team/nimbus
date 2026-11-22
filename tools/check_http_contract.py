@@ -1072,7 +1072,7 @@ class ClientHTTPAcceptance(unittest.TestCase):
         self.assertEqual(self.api("POST", "/api/registration/cancel", {})[1]["status"], "cancelled")
         self.assertEqual(len(self.requests_at(f"/v1/register/{job_id}/cancel")), 1)
         for file in (self.root / "registration").glob("*.json"):
-            self.assertNotIn("Synthetic-mail-token", file.read_text())
+            self.assertNotIn("Synthetic-mail-token", file.read_text(encoding="utf-8"))
         self.assertEqual(registration.status()["status"], "cancelled")
 
 
